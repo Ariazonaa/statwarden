@@ -1,0 +1,27 @@
+# Overlay: das Image lokal bauen statt es aus der Registry zu ziehen.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# Wofuer: eine Aenderung ausprobieren, die noch nicht auf main ist; eine
+# Instanz ohne Zugang zur privaten Registry; oder nachvollziehen, ob ein
+# selbst gebautes Image dasselbe tut wie das veroeffentlichte. Fuer den
+# Normalbetrieb ist das nicht noetig — docker-compose.yml zieht das Image,
+# das die Pipeline gebaut und gescannt hat.
+#
+# `image:` wird hier bewusst UEBERSCHRIEBEN. Ohne das baut Compose zwar
+# lokal, taggt das Ergebnis aber unter dem Registry-Namen — und der naechste
+# `docker compose pull` ueberschriebe es kommentarlos mit dem Stand aus der
+# Registry, ohne dass jemand merkt, dass der lokale Build weg ist.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Fuellt /api/v1/version. Ohne diese Werte meldet ein selbst gebautes
+        # Image "dev"/"none"/"unknown", was nach einem Rollback die eine Frage
+        # unbeantwortet laesst, die dann zaehlt: was laeuft hier gerade.
+        VERSION: ${VERSION:-compose}
+        COMMIT: ${COMMIT:-none}
+        DATE: ${BUILD_DATE:-unknown}
+    image: statwarden:${VERSION:-latest}

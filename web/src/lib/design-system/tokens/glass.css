@@ -1,0 +1,62 @@
+/* ============================================================
+   Surface recipe — shared utility classes (AMOLED, flat).
+   Solid near-black fill, thin #1f1f1f border, inset top-edge
+   highlight, layered soft shadow. No backdrop blur, no
+   translucency: cards sit opaque on the pure-black field.
+   Components compose these instead of re-declaring the recipe.
+   ============================================================ */
+
+.ds-glass {
+	position: relative;
+	background: var(--glass-bg-regular);
+	border: 1px solid var(--glass-border);
+	box-shadow: var(--elevation-glass-2);
+	border-radius: var(--radius-squircle-md);
+}
+
+.ds-glass--thin {
+	background: var(--glass-bg-thin);
+	box-shadow: var(--elevation-glass-1);
+}
+
+.ds-glass--thick {
+	background: var(--glass-bg-thick);
+	box-shadow: var(--elevation-glass-3);
+}
+
+/* ---- Focus visibility on solid surfaces ----------------------
+   A two-layer ring (surface-coloured halo + accent) stays visible
+   on the flat black field. */
+.ds-focusable:focus-visible,
+.ds-glass:focus-visible {
+	outline: none;
+	box-shadow: var(--focus-ring);
+}
+
+/* Ring must survive on elements that already carry card shadows. */
+.ds-glass.ds-focusable:focus-visible {
+	box-shadow: var(--highlight-top), var(--shadow-2), var(--focus-ring);
+}
+
+/* ---- Smooth theme cross-fade ----------------------------------
+   The theme store toggles this class on <html> around a theme switch. */
+:root.ds-theme-transition,
+:root.ds-theme-transition *,
+:root.ds-theme-transition *::before,
+:root.ds-theme-transition *::after {
+	transition:
+		background-color 340ms ease,
+		background 340ms ease,
+		color 340ms ease,
+		border-color 340ms ease,
+		box-shadow 340ms ease,
+		fill 340ms ease,
+		stroke 340ms ease !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	:root.ds-theme-transition,
+	:root.ds-theme-transition * {
+		transition: none !important;
+	}
+}

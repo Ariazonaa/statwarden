@@ -1,0 +1,27 @@
+# Statwarden — development stack: PostgreSQL only, exposed on localhost:5432.
+# The app itself runs natively for hot reload:
+#   docker compose -f docker-compose.dev.yml up -d
+#   make dev                # Go backend (DEV_MODE, text logs)
+#   cd web && npm run dev   # SvelteKit dev server (proxies /api to :3001)
+# Matching DATABASE_URL (see .env.example):
+#   postgres://statwarden:statwarden@localhost:5432/statwarden?sslmode=disable
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: statwarden
+      POSTGRES_PASSWORD: statwarden
+      POSTGRES_DB: statwarden
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U statwarden -d statwarden"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - pgdata-dev:/var/lib/postgresql/data
+
+volumes:
+  pgdata-dev:

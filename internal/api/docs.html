@@ -1,0 +1,845 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Statwarden API reference</title>
+<style nonce="__CSP_NONCE__">
+/*
+ * Everything here is inline on purpose: this page ships inside the single
+ * binary and must render on an air-gapped host with no CDN, no webfont and no
+ * package registry. System font stacks only.
+ */
+:root {
+  color-scheme: light dark;
+  --bg: #fbfbfd;
+  --bg-panel: #ffffff;
+  --bg-sunken: #f4f4f7;
+  --fg: #1b1b1f;
+  --fg-dim: #5f6070;
+  --fg-faint: #8a8b99;
+  --line: #e3e3ea;
+  --accent: #3d5afe;
+  --accent-soft: #eceffe;
+  --get: #1063c4;
+  --post: #0d7a4a;
+  --put: #a8620a;
+  --patch: #7a5c00;
+  --delete: #c02626;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101014;
+    --bg-panel: #17171d;
+    --bg-sunken: #1e1e26;
+    --fg: #e9e9ef;
+    --fg-dim: #a2a3b2;
+    --fg-faint: #74757f;
+    --line: #2a2a34;
+    --accent: #8ba2ff;
+    --accent-soft: #1d2340;
+    --get: #6ea8ff;
+    --post: #52c98d;
+    --put: #e0a352;
+    --patch: #d4bb5a;
+    --delete: #ff7b7b;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.55 var(--sans);
+  -webkit-text-size-adjust: 100%;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, pre, .mono { font-family: var(--mono); font-size: 0.87em; }
+pre {
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 8px 0 0;
+  white-space: pre;
+}
+h1, h2, h3, h4 { line-height: 1.25; margin: 0; font-weight: 620; }
+
+/* ---- shell ---- */
+.wrap { display: flex; align-items: flex-start; max-width: 1500px; margin: 0 auto; }
+#side {
+  position: sticky;
+  top: 0;
+  flex: 0 0 290px;
+  height: 100vh;
+  overflow-y: auto;
+  border-right: 1px solid var(--line);
+  background: var(--bg-panel);
+  padding: 18px 10px 40px 18px;
+}
+#main { flex: 1 1 auto; min-width: 0; padding: 26px 30px 120px; }
+@media (max-width: 900px) {
+  .wrap { display: block; }
+  #side { position: static; height: auto; width: auto; flex: none; border-right: 0; border-bottom: 1px solid var(--line); max-height: 60vh; padding: 14px 16px; }
+  #main { padding: 20px 16px 80px; }
+}
+
+.brand { font-size: 15px; font-weight: 680; letter-spacing: -0.01em; }
+.brand .ver { font-weight: 400; color: var(--fg-faint); font-family: var(--mono); font-size: 12px; }
+#filter {
+  width: 100%;
+  margin: 12px 0 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-sunken);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+}
+#filter:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+#nav { margin-top: 6px; }
+#nav .grp {
+  margin: 14px 0 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+#nav a {
+  display: flex;
+  gap: 7px;
+  align-items: baseline;
+  padding: 2px 6px;
+  border-radius: 6px;
+  color: var(--fg-dim);
+  font-size: 12.5px;
+}
+#nav a:hover { background: var(--accent-soft); text-decoration: none; color: var(--fg); }
+#nav a .m { flex: 0 0 46px; font-family: var(--mono); font-size: 10px; font-weight: 700; text-align: right; }
+#nav a .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- method colours ---- */
+.m-get { color: var(--get); }
+.m-post { color: var(--post); }
+.m-put { color: var(--put); }
+.m-patch { color: var(--patch); }
+.m-delete { color: var(--delete); }
+.m-head, .m-options, .m-trace { color: var(--fg-dim); }
+
+/* ---- intro ---- */
+.intro { max-width: 74ch; margin-bottom: 30px; }
+.intro h1 { font-size: 26px; letter-spacing: -0.02em; }
+.intro .sum { color: var(--fg-dim); margin-top: 4px; }
+.intro .md { margin-top: 14px; color: var(--fg-dim); }
+.intro .md p { margin: 8px 0; }
+
+/* ---- tag section ---- */
+.tag { margin: 34px 0 14px; padding-top: 8px; }
+.tag h2 { font-size: 19px; letter-spacing: -0.01em; }
+.tag p { margin: 4px 0 0; color: var(--fg-dim); font-size: 14px; max-width: 74ch; }
+
+/* ---- operation ---- */
+.op {
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--bg-panel);
+  margin: 10px 0;
+  overflow: hidden;
+  scroll-margin-top: 12px;
+}
+.op > summary {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 10px 13px;
+  cursor: pointer;
+  list-style: none;
+  flex-wrap: wrap;
+}
+.op > summary::-webkit-details-marker { display: none; }
+.op > summary:hover { background: var(--bg-sunken); }
+.op[open] > summary { border-bottom: 1px solid var(--line); }
+.verb {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+}
+.route { font-family: var(--mono); font-size: 13px; word-break: break-all; }
+.route .pp { color: var(--accent); }
+.sum2 { color: var(--fg-dim); font-size: 13.5px; margin-left: auto; text-align: right; }
+@media (max-width: 700px) { .sum2 { margin-left: 0; text-align: left; flex-basis: 100%; } }
+.body { padding: 14px 15px 16px; }
+.desc { color: var(--fg-dim); font-size: 14px; max-width: 78ch; }
+.desc p { margin: 6px 0; }
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 650;
+  padding: 1px 7px;
+  border-radius: 20px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+h4.sec {
+  font-size: 11px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  margin: 18px 0 6px;
+}
+
+/* ---- parameter + schema tables ---- */
+table.par { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+table.par td { padding: 5px 8px 5px 0; vertical-align: top; border-top: 1px solid var(--line); }
+table.par tr:first-child td { border-top: 0; }
+table.par td.n { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; width: 1%; }
+table.par td.ty { color: var(--fg-faint); font-family: var(--mono); font-size: 12px; white-space: nowrap; width: 1%; }
+table.par td.d { color: var(--fg-dim); }
+.req { color: var(--delete); font-weight: 700; }
+
+.sch { font-family: var(--mono); font-size: 12.5px; line-height: 1.6; }
+.sch ul { list-style: none; margin: 0; padding-left: 15px; border-left: 1px solid var(--line); }
+.sch > ul { padding-left: 0; border-left: 0; }
+.sch li { padding: 1px 0; }
+.sch .k { color: var(--fg); }
+.sch .t { color: var(--fg-faint); }
+.sch .rq { color: var(--delete); }
+.sch .cm { color: var(--fg-dim); font-family: var(--sans); font-size: 12.5px; }
+.sch .en { color: var(--post); }
+.sch .rf { color: var(--accent); }
+
+.resp { border-top: 1px solid var(--line); padding: 9px 0 4px; }
+.resp:first-of-type { border-top: 0; }
+.resp .code { font-family: var(--mono); font-weight: 700; font-size: 13px; margin-right: 8px; }
+.c2 { color: var(--post); }
+.c3 { color: var(--put); }
+.c4 { color: var(--patch); }
+.c5 { color: var(--delete); }
+
+/* ---- try it ---- */
+.try { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
+.try .row { display: flex; gap: 8px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
+.try label { flex: 0 0 155px; font-family: var(--mono); font-size: 12px; color: var(--fg-dim); }
+.try input[type=text], .try textarea, .try input[type=file] {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg-sunken);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.try textarea { width: 100%; flex-basis: 100%; min-height: 110px; resize: vertical; white-space: pre; }
+.try input:focus, .try textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+button {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 15px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--bg-sunken);
+  color: var(--fg);
+  cursor: pointer;
+}
+button.go { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:hover { filter: brightness(1.08); }
+button:disabled { opacity: 0.55; cursor: default; }
+.hint { color: var(--fg-faint); font-size: 12px; margin-top: 8px; }
+.out { margin-top: 12px; }
+.out .st { font-family: var(--mono); font-size: 13px; font-weight: 700; }
+.out .meta { color: var(--fg-faint); font-size: 12px; font-family: var(--mono); margin-top: 3px; }
+.err { color: var(--delete); }
+.msg { padding: 40px 4px; color: var(--fg-dim); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <aside id="side">
+    <div class="brand">Statwarden API <span class="ver" id="ver"></span></div>
+    <input id="filter" type="text" placeholder="Filter operations…" autocomplete="off" spellcheck="false">
+    <nav id="nav"></nav>
+  </aside>
+  <main id="main"><div class="msg">Loading the OpenAPI description…</div></main>
+</div>
+
+<script nonce="__CSP_NONCE__">
+/*
+ * The page fetches /api/v1/openapi.json at runtime and renders it. Nothing
+ * about the API surface is baked into this file, so the reference cannot drift
+ * from the spec the same binary serves — a new endpoint appears here the moment
+ * it appears in the document.
+ */
+(function () {
+  'use strict';
+
+  var SPEC_URL = '/api/v1/openapi.json';
+  var CSRF_COOKIE = 'statwarden_csrf';
+  var METHODS = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace'];
+  var MUTATING = { POST: 1, PUT: 1, PATCH: 1, DELETE: 1 };
+
+  var spec = null;
+  var main = document.getElementById('main');
+  var nav = document.getElementById('nav');
+
+  // ---- helpers ----------------------------------------------------------
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  /* Deliberately tiny: bold, code spans, links and paragraph breaks are the
+   * only markdown the spec's descriptions actually use. Everything is escaped
+   * first, so this can never inject markup. */
+  function md(s) {
+    if (!s) return '';
+    var h = esc(s)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+    return h.split(/\n{2,}/).map(function (p) {
+      return '<p>' + p.replace(/\n/g, '<br>') + '</p>';
+    }).join('');
+  }
+
+  function resolveRef(ref) {
+    if (typeof ref !== 'string' || ref.slice(0, 2) !== '#/') return null;
+    var cur = spec;
+    var parts = ref.slice(2).split('/');
+    for (var i = 0; i < parts.length; i++) {
+      var key = parts[i].replace(/~1/g, '/').replace(/~0/g, '~');
+      if (cur == null || typeof cur !== 'object') return null;
+      cur = cur[key];
+    }
+    return cur;
+  }
+
+  // deref follows $ref chains. Returns the node itself when it is not a ref.
+  function deref(node) {
+    var guard = 0;
+    while (node && node.$ref && guard++ < 32) node = resolveRef(node.$ref);
+    return node;
+  }
+
+  function refName(node) {
+    if (node && typeof node.$ref === 'string') {
+      var p = node.$ref.split('/');
+      return p[p.length - 1];
+    }
+    return null;
+  }
+
+  // typeOf renders the human label for a schema's type: "string", "Monitor[]",
+  // "integer<int64>", "string | null".
+  function typeOf(node) {
+    var name = refName(node);
+    if (name) return name;
+    var s = deref(node);
+    if (!s || typeof s !== 'object') return 'any';
+    if (s.enum) return 'enum';
+    if (s.allOf) return 'object';
+    if (s.oneOf || s.anyOf) {
+      return (s.oneOf || s.anyOf).map(typeOf).join(' | ');
+    }
+    var t = s.type;
+    if (Array.isArray(t)) return t.join(' | ');
+    if (t === 'array') return typeOf(s.items || {}) + '[]';
+    if (!t) return 'any';
+    return s.format ? t + '<' + s.format + '>' : t;
+  }
+
+  // mergeAllOf flattens allOf into one object schema so the reader sees a
+  // single property list rather than "one of these three fragments".
+  function mergeAllOf(s) {
+    if (!s || !s.allOf) return s;
+    var out = { type: 'object', properties: {}, required: [] };
+    for (var i = 0; i < s.allOf.length; i++) {
+      var part = mergeAllOf(deref(s.allOf[i])) || {};
+      Object.assign(out.properties, part.properties || {});
+      if (part.required) out.required = out.required.concat(part.required);
+      if (part.description && !out.description) out.description = part.description;
+    }
+    Object.keys(s).forEach(function (k) {
+      if (k !== 'allOf') out[k] = s[k];
+    });
+    return out;
+  }
+
+  // ---- schema rendering -------------------------------------------------
+
+  function schemaHtml(node, depth, stack) {
+    depth = depth || 0;
+    stack = stack || [];
+    var name = refName(node);
+
+    // Recursion and runaway nesting both end here rather than hanging the tab.
+    if (name && stack.indexOf(name) !== -1) {
+      return '<li><span class="rf">' + esc(name) + '</span> <span class="cm">(recursive)</span></li>';
+    }
+    if (depth > 6) return '<li><span class="cm">…</span></li>';
+
+    var s = mergeAllOf(deref(node));
+    if (!s || typeof s !== 'object') return '';
+    var next = name ? stack.concat([name]) : stack;
+
+    if (s.oneOf || s.anyOf) {
+      var variants = s.oneOf || s.anyOf;
+      return '<li><span class="cm">one of:</span><ul>' + variants.map(function (v) {
+        return '<li><span class="t">' + esc(typeOf(v)) + '</span><ul>' +
+          schemaHtml(v, depth + 1, next) + '</ul></li>';
+      }).join('') + '</ul></li>';
+    }
+
+    if (s.type === 'array' || s.items) {
+      var inner = schemaHtml(s.items || {}, depth + 1, next);
+      return '<li><span class="t">array of ' + esc(typeOf(s.items || {})) + '</span>' +
+        (inner ? '<ul>' + inner + '</ul>' : '') + '</li>';
+    }
+
+    if (s.properties) {
+      var required = s.required || [];
+      return Object.keys(s.properties).map(function (key) {
+        var p = s.properties[key];
+        var ps = mergeAllOf(deref(p)) || {};
+        var isReq = required.indexOf(key) !== -1;
+        // Only nest when the child actually adds something. typeOf() already
+        // renders "integer<int64>[]", so expanding an array of primitives into
+        // "array of integer<int64> → integer<int64>" is pure noise; an array of
+        // objects, on the other hand, has properties worth showing.
+        var kids = '';
+        var items = ps.items ? mergeAllOf(deref(ps.items)) : null;
+        if (ps.properties || ps.oneOf || ps.anyOf ||
+            (items && (items.properties || items.oneOf || items.anyOf))) {
+          kids = '<ul>' + schemaHtml(ps.properties ? p : ps.items, depth + 1, next) + '</ul>';
+        }
+        var enums = ps.enum
+          ? ' <span class="en">' + ps.enum.map(function (e) { return esc(JSON.stringify(e)); }).join(' | ') + '</span>'
+          : '';
+        return '<li><span class="k">' + esc(key) + '</span>' +
+          (isReq ? '<span class="rq">*</span>' : '') +
+          ' <span class="t">' + esc(typeOf(p)) + '</span>' + enums +
+          (ps.description ? ' <span class="cm">— ' + esc(ps.description) + '</span>' : '') +
+          kids + '</li>';
+      }).join('');
+    }
+
+    if (s.enum) {
+      return '<li><span class="t">' + esc(typeOf(s)) + '</span> <span class="en">' +
+        s.enum.map(function (e) { return esc(JSON.stringify(e)); }).join(' | ') + '</span></li>';
+    }
+
+    var lead = '<li><span class="t">' + esc(typeOf(s)) + '</span>' +
+      (s.description ? ' <span class="cm">— ' + esc(s.description) + '</span>' : '') + '</li>';
+    return lead;
+  }
+
+  function schemaBlock(node) {
+    var inner = schemaHtml(node, 0, []);
+    if (!inner) return '<div class="desc">No schema.</div>';
+    var name = refName(node);
+    return (name ? '<div class="sch"><span class="rf">' + esc(name) + '</span></div>' : '') +
+      '<div class="sch"><ul>' + inner + '</ul></div>';
+  }
+
+  // ---- request body samples --------------------------------------------
+
+  // sampleFor builds a plausible JSON body from a schema so "try it" starts
+  // from something editable instead of an empty box.
+  function sampleFor(node, depth, stack) {
+    depth = depth || 0;
+    stack = stack || [];
+    var name = refName(node);
+    if (depth > 5 || (name && stack.indexOf(name) !== -1)) return null;
+    var s = mergeAllOf(deref(node));
+    if (!s || typeof s !== 'object') return null;
+    var next = name ? stack.concat([name]) : stack;
+
+    if (s.example !== undefined) return s.example;
+    if (s.default !== undefined) return s.default;
+    if (s.enum && s.enum.length) return s.enum[0];
+    if (s.oneOf || s.anyOf) return sampleFor((s.oneOf || s.anyOf)[0], depth + 1, next);
+
+    var t = Array.isArray(s.type) ? s.type[0] : s.type;
+    if (t === 'array' || s.items) {
+      var item = sampleFor(s.items || {}, depth + 1, next);
+      return item === null ? [] : [item];
+    }
+    if (s.properties) {
+      var required = s.required || [];
+      var out = {};
+      Object.keys(s.properties).forEach(function (k) {
+        // Only required fields are prefilled; a body stuffed with every
+        // optional property is noise the caller has to delete by hand.
+        if (required.length && required.indexOf(k) === -1) return;
+        out[k] = sampleFor(s.properties[k], depth + 1, next);
+      });
+      if (!required.length) {
+        Object.keys(s.properties).slice(0, 4).forEach(function (k) {
+          out[k] = sampleFor(s.properties[k], depth + 1, next);
+        });
+      }
+      return out;
+    }
+    if (t === 'object') return {};
+    if (t === 'integer' || t === 'number') return 0;
+    if (t === 'boolean') return false;
+    if (t === 'string') {
+      if (s.format === 'date-time') return new Date().toISOString();
+      return '';
+    }
+    return null;
+  }
+
+  // ---- CSRF -------------------------------------------------------------
+
+  /* Mirrors csrfToken() in web/src/lib/api/client.ts. The server issues a
+   * readable (non-HttpOnly) statwarden_csrf cookie precisely so a same-origin
+   * caller can echo it back in the header; without this every POST from this
+   * page would answer 403. */
+  function csrfToken() {
+    var parts = document.cookie.split('; ');
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i].indexOf(CSRF_COOKIE + '=') === 0) {
+        return parts[i].slice(CSRF_COOKIE.length + 1);
+      }
+    }
+    return '';
+  }
+
+  // ---- operation collection --------------------------------------------
+
+  function collect() {
+    var ops = [];
+    var paths = spec.paths || {};
+    Object.keys(paths).forEach(function (path) {
+      var item = paths[path] || {};
+      METHODS.forEach(function (m) {
+        if (!item[m]) return;
+        var op = item[m];
+        var tag = (op.tags && op.tags[0]) || 'Other';
+        ops.push({
+          path: path,
+          method: m.toUpperCase(),
+          op: op,
+          tag: tag,
+          // Path-level parameters apply to every operation on that path.
+          params: (item.parameters || []).concat(op.parameters || []),
+          id: op.operationId || (m + path.replace(/[^a-zA-Z0-9]+/g, '-'))
+        });
+      });
+    });
+    return ops;
+  }
+
+  function groupByTag(ops) {
+    var order = (spec.tags || []).map(function (t) { return t.name; });
+    var byTag = {};
+    ops.forEach(function (o) { (byTag[o.tag] = byTag[o.tag] || []).push(o); });
+    Object.keys(byTag).forEach(function (t) {
+      if (order.indexOf(t) === -1) order.push(t);
+    });
+    return order.filter(function (t) { return byTag[t]; }).map(function (t) {
+      byTag[t].sort(function (a, b) {
+        return a.path === b.path
+          ? METHODS.indexOf(a.method.toLowerCase()) - METHODS.indexOf(b.method.toLowerCase())
+          : a.path.localeCompare(b.path);
+      });
+      return { name: t, ops: byTag[t] };
+    });
+  }
+
+  function prettyPath(p) {
+    return esc(p).replace(/\{([^}]+)\}/g, '<span class="pp">{$1}</span>');
+  }
+
+  // ---- rendering --------------------------------------------------------
+
+  function render() {
+    var groups = groupByTag(collect());
+    var info = spec.info || {};
+    document.getElementById('ver').textContent = info.version || '';
+
+    var tagDesc = {};
+    (spec.tags || []).forEach(function (t) { tagDesc[t.name] = t.description; });
+
+    var html = '<div class="intro"><h1>' + esc(info.title || 'API reference') + '</h1>' +
+      (info.summary ? '<div class="sum">' + esc(info.summary) + '</div>' : '') +
+      '<div class="md">' + md(info.description) + '</div>' +
+      '<div class="hint">Rendered live from <a href="' + SPEC_URL + '">' + SPEC_URL + '</a>' +
+      ' — this page holds no copy of the API surface and cannot fall out of date.</div></div>';
+
+    groups.forEach(function (g) {
+      html += '<section class="tag"><h2>' + esc(g.name) + '</h2>' +
+        (tagDesc[g.name] ? '<p>' + esc(tagDesc[g.name]) + '</p>' : '') + '</section>';
+      g.ops.forEach(function (o) { html += opHtml(o); });
+    });
+
+    main.innerHTML = html;
+    renderNav(groups);
+    wire();
+    if (location.hash) {
+      var target = document.getElementById(location.hash.slice(1));
+      if (target) { target.open = true; target.scrollIntoView(); }
+    }
+  }
+
+  function renderNav(groups) {
+    var html = '';
+    groups.forEach(function (g) {
+      html += '<div class="grp">' + esc(g.name) + '</div>';
+      g.ops.forEach(function (o) {
+        html += '<a href="#' + esc(o.id) + '" data-op="' + esc(o.id) + '" ' +
+          'data-q="' + esc((o.method + ' ' + o.path + ' ' + (o.op.summary || '')).toLowerCase()) + '">' +
+          '<span class="m m-' + o.method.toLowerCase() + '">' + o.method + '</span>' +
+          '<span class="t">' + esc(o.op.summary || o.path) + '</span></a>';
+      });
+    });
+    nav.innerHTML = html;
+  }
+
+  function opHtml(o) {
+    var op = o.op;
+    var h = '<details class="op" id="' + esc(o.id) + '"><summary>' +
+      '<span class="verb m-' + o.method.toLowerCase() + '">' + o.method + '</span>' +
+      '<span class="route">' + prettyPath(o.path) + '</span>' +
+      (op.summary ? '<span class="sum2">' + esc(op.summary) + '</span>' : '') +
+      '</summary><div class="body">';
+
+    // security: [] on an operation is the spec's way of saying "no credential".
+    if (Array.isArray(op.security) && op.security.length === 0) {
+      h += '<div><span class="badge">public</span></div>';
+    }
+    if (op.deprecated) h += '<div><span class="badge">deprecated</span></div>';
+    if (op.description) h += '<div class="desc">' + md(op.description) + '</div>';
+
+    var params = o.params.map(deref).filter(Boolean);
+    if (params.length) {
+      h += '<h4 class="sec">Parameters</h4><table class="par">';
+      params.forEach(function (p) {
+        h += '<tr><td class="n">' + esc(p.name) +
+          (p.required ? '<span class="req">*</span>' : '') + '</td>' +
+          '<td class="ty">' + esc(p.in) + ' · ' + esc(typeOf(p.schema || {})) + '</td>' +
+          '<td class="d">' + (p.description ? md(p.description) : '') + '</td></tr>';
+      });
+      h += '</table>';
+    }
+
+    var rb = deref(op.requestBody);
+    if (rb && rb.content) {
+      var ct = Object.keys(rb.content)[0];
+      h += '<h4 class="sec">Request body <span class="mono">' + esc(ct) + '</span>' +
+        (rb.required ? ' <span class="req">*</span>' : '') + '</h4>' +
+        schemaBlock(rb.content[ct].schema || {});
+    }
+
+    var responses = op.responses || {};
+    var codes = Object.keys(responses).sort();
+    if (codes.length) {
+      h += '<h4 class="sec">Responses</h4>';
+      codes.forEach(function (code) {
+        var r = deref(responses[code]) || {};
+        var cls = 'c' + String(code).charAt(0);
+        h += '<div class="resp"><span class="code ' + cls + '">' + esc(code) + '</span>' +
+          '<span class="desc">' + esc(r.description || '') + '</span>';
+        if (r.content) {
+          var rct = Object.keys(r.content)[0];
+          var sch = r.content[rct] && r.content[rct].schema;
+          if (sch) h += schemaBlock(sch);
+        }
+        h += '</div>';
+      });
+    }
+
+    h += tryHtml(o) + '</div></details>';
+    return h;
+  }
+
+  function tryHtml(o) {
+    var params = o.params.map(deref).filter(Boolean);
+    var rb = deref(o.op.requestBody);
+    var ct = rb && rb.content ? Object.keys(rb.content)[0] : null;
+    var isMultipart = ct === 'multipart/form-data';
+
+    var h = '<div class="try"><h4 class="sec">Try it</h4>';
+    params.forEach(function (p) {
+      if (p.in !== 'path' && p.in !== 'query' && p.in !== 'header') return;
+      h += '<div class="row"><label>' + esc(p.name) + ' <span class="t">(' + esc(p.in) + ')</span></label>' +
+        '<input type="text" data-p="' + esc(p.name) + '" data-in="' + esc(p.in) + '" ' +
+        'placeholder="' + esc(p.example != null ? p.example : (p.required ? 'required' : 'optional')) + '"></div>';
+    });
+
+    if (isMultipart) {
+      var props = ((deref(rb.content[ct].schema) || {}).properties) || {};
+      Object.keys(props).forEach(function (field) {
+        h += '<div class="row"><label>' + esc(field) + ' <span class="t">(file)</span></label>' +
+          '<input type="file" data-file="' + esc(field) + '"></div>';
+      });
+    } else if (ct) {
+      var sample = sampleFor(rb.content[ct].schema || {}, 0, []);
+      h += '<div class="row"><textarea data-body spellcheck="false">' +
+        esc(JSON.stringify(sample === null ? {} : sample, null, 2)) + '</textarea></div>';
+    }
+
+    h += '<div class="row"><button class="go" data-send>Send</button>' +
+      '<span class="hint">Same-origin request with your session cookie' +
+      (MUTATING[o.method] ? ', plus the <code>X-CSRF-Token</code> header from <code>statwarden_csrf</code>' : '') +
+      '. This hits the live instance — there is no sandbox.</span></div>' +
+      '<div class="out" data-out></div></div>';
+    return h;
+  }
+
+  // ---- try it -----------------------------------------------------------
+
+  function wire() {
+    var ops = collect();
+    var byId = {};
+    ops.forEach(function (o) { byId[o.id] = o; });
+
+    main.addEventListener('click', function (ev) {
+      var btn = ev.target.closest('button[data-send]');
+      if (!btn) return;
+      var el = btn.closest('.op');
+      var o = byId[el.id];
+      if (o) send(o, el, btn);
+    });
+  }
+
+  function send(o, el, btn) {
+    var out = el.querySelector('[data-out]');
+    var path = o.path;
+    var query = [];
+    var headers = {};
+
+    el.querySelectorAll('input[data-p]').forEach(function (inp) {
+      var v = inp.value.trim();
+      if (!v) return;
+      var name = inp.getAttribute('data-p');
+      var where = inp.getAttribute('data-in');
+      if (where === 'path') path = path.replace('{' + name + '}', encodeURIComponent(v));
+      else if (where === 'query') query.push(encodeURIComponent(name) + '=' + encodeURIComponent(v));
+      else headers[name] = v;
+    });
+
+    // An unfilled path placeholder would be sent literally and answer a
+    // confusing 404, so stop with a message that names the parameter.
+    var missing = path.match(/\{([^}]+)\}/);
+    if (missing) {
+      out.innerHTML = '<div class="st err">Fill in the path parameter ' +
+        esc(missing[1]) + ' first.</div>';
+      return;
+    }
+
+    var url = path + (query.length ? '?' + query.join('&') : '');
+    var init = { method: o.method, credentials: 'same-origin', headers: headers };
+
+    if (MUTATING[o.method]) headers['X-CSRF-Token'] = csrfToken();
+
+    var files = el.querySelectorAll('input[data-file]');
+    var bodyEl = el.querySelector('[data-body]');
+    if (files.length) {
+      var fd = new FormData();
+      var picked = false;
+      files.forEach(function (f) {
+        if (f.files && f.files[0]) { fd.append(f.getAttribute('data-file'), f.files[0]); picked = true; }
+      });
+      if (!picked) {
+        out.innerHTML = '<div class="st err">Choose a file first.</div>';
+        return;
+      }
+      // Content-Type is deliberately unset: only the browser can produce the
+      // multipart boundary, and naming it by hand yields a body Go cannot parse.
+      init.body = fd;
+    } else if (bodyEl && o.method !== 'GET' && o.method !== 'HEAD') {
+      var text = bodyEl.value.trim();
+      if (text) {
+        try {
+          JSON.parse(text);
+        } catch (e) {
+          out.innerHTML = '<div class="st err">Request body is not valid JSON: ' + esc(e.message) + '</div>';
+          return;
+        }
+        headers['Content-Type'] = 'application/json';
+        init.body = text;
+      }
+    }
+
+    btn.disabled = true;
+    out.innerHTML = '<div class="st">…</div>';
+    var started = Date.now();
+
+    fetch(url, init).then(function (res) {
+      return res.text().then(function (text) { return { res: res, text: text }; });
+    }).then(function (r) {
+      var ms = Date.now() - started;
+      var cls = 'c' + String(r.res.status).charAt(0);
+      var body = r.text;
+      var ctype = r.res.headers.get('content-type') || '';
+      if (ctype.indexOf('json') !== -1 && body) {
+        try { body = JSON.stringify(JSON.parse(body), null, 2); } catch (e) { /* leave raw */ }
+      }
+      out.innerHTML = '<div class="st ' + cls + '">' + r.res.status + ' ' + esc(r.res.statusText) + '</div>' +
+        '<div class="meta">' + esc(o.method) + ' ' + esc(url) + ' · ' + ms + ' ms' +
+        (ctype ? ' · ' + esc(ctype) : '') + '</div>' +
+        (body ? '<pre>' + esc(body) + '</pre>' : '<div class="meta">(empty body)</div>');
+    }).catch(function (e) {
+      out.innerHTML = '<div class="st err">Request failed: ' + esc(e.message) + '</div>';
+    }).then(function () {
+      btn.disabled = false;
+    });
+  }
+
+  // ---- filter -----------------------------------------------------------
+
+  document.getElementById('filter').addEventListener('input', function (ev) {
+    var q = ev.target.value.trim().toLowerCase();
+    nav.querySelectorAll('a[data-q]').forEach(function (a) {
+      a.hidden = q !== '' && a.getAttribute('data-q').indexOf(q) === -1;
+    });
+    nav.querySelectorAll('.grp').forEach(function (g) {
+      var any = false;
+      var n = g.nextElementSibling;
+      while (n && n.tagName === 'A') {
+        if (!n.hidden) { any = true; break; }
+        n = n.nextElementSibling;
+      }
+      g.hidden = !any;
+    });
+  });
+
+  // ---- boot -------------------------------------------------------------
+
+  fetch(SPEC_URL, { credentials: 'same-origin', headers: { Accept: 'application/json' } })
+    .then(function (res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    })
+    .then(function (doc) {
+      spec = doc;
+      render();
+    })
+    .catch(function (e) {
+      main.innerHTML = '<div class="msg err">Could not load <code>' + SPEC_URL + '</code>: ' +
+        esc(e.message) + '</div>';
+    });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,6527 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Statwarden API",
+    "version": "dev",
+    "summary": "Uptime monitoring, alerting and status pages.",
+    "description": "The `/api/v1` REST surface of an Statwarden instance, plus the operational endpoints a reverse proxy and a scraper depend on.\n\n**Authentication.** Two principals are accepted. A browser session sends the `statwarden_session` cookie; every mutating request must additionally echo the readable `statwarden_csrf` cookie in the `X-CSRF-Token` header. A programmatic client sends `Authorization: Bearer <api key secret>` and is *exempt* from CSRF — a bearer client has no ambient cookie to be confused with.\n\n**Authorization.** Endpoints state their requirement in the operation description as one of *any authenticated principal*, *writer* (role `user` or `admin`, plus the `write` scope for API keys) or *admin* (role `admin`, plus the `admin` scope). Endpoints marked *public* need no credential at all and are rate limited per client IP.\n\n**Errors.** Every error is RFC 7807 `application/problem+json`. List endpoints return `{items,total,limit,offset}`.\n\n**Try it out.** Requests issued from this page hit the live instance with your real session. There is no sandbox.",
+    "license": {
+      "name": "See repository"
+    }
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "This instance"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Operations",
+      "description": "Health, readiness, build metadata and metrics."
+    },
+    {
+      "name": "Auth",
+      "description": "First-run setup, login and logout."
+    },
+    {
+      "name": "Profile",
+      "description": "Self-service: sessions, password, e-mail, 2FA, API keys."
+    },
+    {
+      "name": "Monitors",
+      "description": "Monitor CRUD, control actions and heartbeats."
+    },
+    {
+      "name": "Monitor groups",
+      "description": "Organisational folders for the monitor list."
+    },
+    {
+      "name": "Tags",
+      "description": "Monitor labels."
+    },
+    {
+      "name": "Notifications",
+      "description": "Notification channels."
+    },
+    {
+      "name": "Maintenance",
+      "description": "Maintenance windows that suppress alerts."
+    },
+    {
+      "name": "Status pages",
+      "description": "Status page CRUD, incidents and layout."
+    },
+    {
+      "name": "Public",
+      "description": "Unauthenticated, rate-limited endpoints: status pages, badges, push heartbeats, subscription links."
+    },
+    {
+      "name": "Reporting",
+      "description": "Uptime, SLA and certificate reporting."
+    },
+    {
+      "name": "Registry",
+      "description": "Available monitor and notification types."
+    },
+    {
+      "name": "Administration",
+      "description": "Users, settings, audit log, config import/export."
+    }
+  ],
+  "security": [
+    {
+      "sessionCookie": []
+    },
+    {
+      "apiKey": []
+    }
+  ],
+  "paths": {
+    "/api/v1/audit-log": {
+      "get": {
+        "tags": [
+          "Administration"
+        ],
+        "operationId": "listAuditLog",
+        "summary": "Read the audit log",
+        "description": "Admin.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Offset"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of audit entries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ListEnvelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/AuditEntry"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/audit-log.csv": {
+      "get": {
+        "tags": [
+          "Administration"
+        ],
+        "operationId": "exportAuditLogCSV",
+        "summary": "Download the audit log as CSV",
+        "description": "Admin. Streams audit entries newest first for the window given by `from`/`to`, capped at 50000 rows. When the window did not fit, the response carries `X-Statwarden-Export-Truncated: true` and the caller should narrow it — a CSV body has no way to say that it is incomplete. The export is itself recorded in the audit log as `audit.export`.",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "Inclusive lower bound, RFC3339. Omitted means since the beginning.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Inclusive upper bound, RFC3339. Defaults to now.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV download.",
+            "headers": {
+              "X-Statwarden-Export-Truncated": {
+                "description": "Present and \"true\" when the window exceeded the row cap and the body is partial.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "login",
+        "summary": "Sign in",
+        "description": "Public, rate limited per IP and locked out per account after repeated failures. When 2FA is enabled the TOTP code (or a backup code) is verified in this same request — there is no separate challenge endpoint.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in. Sets the session and CSRF cookies.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "description": "Invalid credentials or second factor.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts from this IP, or the account is temporarily locked.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "logout",
+        "summary": "Sign out",
+        "description": "Deletes the current session and clears the auth cookies. Safe to call without a session.",
+        "security": [],
+        "responses": {
+          "204": {
+            "description": "Signed out."
+          }
+        }
+      }
+    },
+    "/api/v1/auth/oidc/providers": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "listOIDCProviders",
+        "summary": "List configured single-sign-on providers",
+        "description": "Public and rate-limited. Returns only the local id and display name - never the client id or secret. Registered only when single sign-on is configured; an instance without it serves no /auth/oidc route at all.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The configured providers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OIDCProviderInfo"
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/oidc/{provider}/callback": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "oidcCallback",
+        "summary": "Single-sign-on redirect target",
+        "description": "Public and rate-limited; the identity provider redirects the browser here. This is the URI that must be whitelisted at the provider, as {PUBLIC_BASE_URL}/api/v1/auth/oidc/{provider}/callback. It serves both the anonymous login mode and the authenticated link mode. An account is resolved by (issuer, subject) and NEVER by the asserted e-mail address; an unknown subject is refused unless auto-provisioning has been explicitly enabled. Always answers with a redirect - coarse `?error=` codes on failure, never problem+json. Registered only when single sign-on is configured; an instance without it serves no /auth/oidc route at all.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "description": "The local provider id from GET /auth/oidc/providers.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to the dashboard on success, or to /login?error=... on failure."
+          }
+        }
+      }
+    },
+    "/api/v1/auth/oidc/{provider}/start": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "startOIDCLogin",
+        "summary": "Begin a single-sign-on login",
+        "description": "Public and rate-limited. Redirects the browser to the identity provider with PKCE (S256), a state value and a nonce, all held in a short-lived HttpOnly cookie. Navigate to this URL in the address bar; it is not a fetch endpoint. Registered only when single sign-on is configured; an instance without it serves no /auth/oidc route at all.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "description": "The local provider id from GET /auth/oidc/providers.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to the identity provider, or back to /login?error=... when the provider cannot be reached."
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/password-reset": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "requestPasswordReset",
+        "summary": "Request a password-reset mail",
+        "description": "Public and rate-limited. The response is IDENTICAL for every outcome - address known, address unknown, account deactivated, mail not configured - so this endpoint cannot be used to discover whether an account exists. Do not build a client that treats the response as confirmation that an address is registered.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordResetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted. Says nothing about whether an account exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordResetAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/password-reset/confirm": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "confirmPasswordReset",
+        "summary": "Complete a password reset",
+        "description": "Public and rate-limited. The token is single-use and expires after an hour. Every token failure - unknown, expired, already redeemed - returns the same 400, so a caller cannot learn that a token once existed. On success EVERY session of the account is revoked and the caller is NOT signed in: they must log in with the new password.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordResetConfirmRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "The password was changed and all sessions were revoked."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          }
+        }
+      }
+    },
+    "/api/v1/badge/{token}/status.svg": {
+      "get": {
+        "tags": [
+          "Public"
+        ],
+        "operationId": "getStatusBadge",
+        "summary": "Embeddable status badge",
+        "description": "Public and rate limited. An SVG suitable for a README, addressed by the monitor's opaque badge token (minted via POST /monitors/{id}/badge) rather than its id, so the endpoint cannot be walked to enumerate monitors.",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/BadgeToken"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The badge.",
+            "content": {
+              "image/svg+xml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/badge/{token}/uptime.svg": {
+      "get": {
+        "tags": [
+          "Public"
+        ],
+        "operationId": "getUptimeBadge",
+        "summary": "Embeddable uptime badge",
+        "description": "Public and rate limited. An SVG showing the uptime percentage over a window, addressed by the monitor's opaque badge token rather than its id.",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/BadgeToken"
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "description": "Reporting window, e.g. `24h`, `30d`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The badge.",
+            "content": {
+              "image/svg+xml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/export": {
+      "get": {
+        "tags": [
+          "Administration"
+        ],
+        "operationId": "exportConfig",
+        "summary": "Export the instance configuration",
+        "description": "Admin. Monitors, tags, notification channels, maintenance windows and status pages as one JSON document.",
+        "responses": {
+          "200": {
+            "description": "The configuration document.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/import": {
+      "post": {
+        "tags": [
+          "Administration"
+        ],
+        "operationId": "importConfig",
+        "summary": "Import an exported configuration",
+        "description": "Admin. CSRF required.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Import summary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/import/uptime-kuma": {
+      "post": {
+        "tags": [
+          "Administration"
+        ],
+        "operationId": "importUptimeKuma",
+        "summary": "Import an Uptime Kuma backup",
+        "description": "Admin. CSRF required. Unsupported monitor types are reported in the summary rather than failing the whole import.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Import summary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/maintenance": {
+      "get": {
+        "tags": [
+          "Maintenance"
+        ],
+        "operationId": "listMaintenance",
+        "summary": "List maintenance windows",
+        "description": "Any authenticated principal.",
+        "responses": {
+          "200": {
+            "description": "Windows.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MaintenanceWindow"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Maintenance"
+        ],
+        "operationId": "createMaintenance",
+        "summary": "Create a maintenance window",
+        "description": "Writer. CSRF required. Alerts for the listed monitors are suppressed while the window is in effect.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaintenanceInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintenanceWindow"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/maintenance/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ID"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Maintenance"
+        ],
+        "operationId": "getMaintenance",
+        "summary": "Read one window",
+        "description": "Any authenticated principal.",
+        "responses": {
+          "200": {
+            "description": "The window.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintenanceWindow"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Maintenance"
+        ],
+        "operationId": "updateMaintenance",
+        "summary": "Replace a window",
+        "description": "Writer. CSRF required.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaintenanceInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintenanceWindow"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Maintenance"
+        ],
+        "operationId": "deleteMaintenance",
+        "summary": "Delete a window",
+        "description": "Writer. CSRF required.",
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/me": {
+      "get": {
+        "tags": [
+          "Profile"
+        ],
+        "operationId": "getMe",
+        "summary": "The signed-in user",
+        "description": "Any authenticated principal.",
+        "responses": {
+          "200": {
+            "description": "The caller.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/me/api-keys": {
+      "get": {
+        "tags": [
+          "Profile"
+        ],
+        "operationId": "listAPIKeys",
+        "summary": "The caller's API keys",
+        "description": "Any authenticated principal. Secrets are never returned; only the prefix is.",
+        "responses": {
+          "200": {
+            "description": "Keys.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/APIKey"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Profile"
+        ],
+        "operationId": "createAPIKey",
+        "summary": "Mint an API key",
+        "description": "Any authenticated principal; CSRF required. The secret is returned exactly once, in this response. The server stores only its hash.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/APIKeyCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/me/api-keys/{id}": {
+      "delete": {
+        "tags": [
+          "Profile"
+        ],
+        "operationId": "revokeAPIKey",
+        "summary": "Revoke an API key",
+        "description": "Any authenticated principal; CSRF required. Scoped to the caller's own keys.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ID"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/me/avatar": {
+      "post": {
+        "tags": [
+          "Profile"
+        ],
+        "operationId": "uploadAvatar",
+        "summary": "Upload the caller's avatar",
+        "description": "Any authenticated principal, including a viewer - a user owns their own profile; CSRF required. The subject is always the caller: there is no id parameter, so the endpoint cannot be pointed at another user. The image type is decided by sniffing the uploaded bytes, never by the declared Content-Type or the file name; PNG, JPEG and WebP are accepted and SVG is not. Maximum 1 MiB and 1024x1024 pixels.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "avatar"
+                ],
+                "properties": {
+                  "avatar": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "413": {
+            "description": "The upload exceeds 1 MiB.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Not a PNG, JPEG or WebP image.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Profile"
+        ],
+        "operationId": "deleteAvatar",
+        "summary": "Remove the caller's avatar",
+        "description": "Any authenticated principal; CSRF required. Idempotent: a user without an avatar also gets 204.",
+        "responses": {
+          "204": {
+            "description": "Removed."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/me/email": {
+      "put": {
+        "tags": [
+          "Profile"
+        ],
+        "operationId": "changeEmail",
+        "summary": "Change the caller's e-mail address",
+        "description": "Any authenticated principal; CSRF required. The current password must be supplied and is verified first: the address is where password-reset tokens are mailed, so a hijacked session must not be able to repoint it. 403 when the password is wrong; 409 when the account signs in through SSO and has no local password to check.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeEmailRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/me/oidc/identities": {
+      "get": {
+        "tags": [
+          "Profile"
+        ],
+        "operationId": "listIdentities",
+        "summary": "List the caller's linked single-sign-on accounts",
+        "description": "Any authenticated principal. Registered only when single sign-on is configured; an instance without it serves no /auth/oidc route at all.",
+        "responses": {
+          "200": {
+            "description": "The caller's linked identities.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExternalIdentity"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/me/oidc/identities/{id}": {
+      "delete": {
+        "tags": [
+          "Profile"
+        ],
+        "operationId": "unlinkIdentity",
+        "summary": "Unlink one of the caller's single-sign-on accounts",
+        "description": "Any authenticated principal; CSRF required. Scoped to the caller's own links. Refuses with 409 when it would remove the last identity of an account that has no local password, which would otherwise be an irrecoverable self-lockout. Registered only when single sign-on is configured; an instance without it serves no /auth/oidc route at all.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ID"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Unlinked."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/me/oidc/{provider}/link-start": {
+      "post": {
+        "tags": [
+          "Profile"
+        ],
+        "operationId": "startOIDCLink",
+        "summary": "Begin linking a single-sign-on account to the caller",
+        "description": "Any authenticated principal; CSRF required. A POST returning the authorize URL rather than a redirect, because linking is a mutation and a top-level GET navigation cannot carry the CSRF header. The resulting identity is attached to the CALLER, whatever the provider asserts about the address. Registered only when single sign-on is configured; an instance without it serves no /auth/oidc route at all.",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "description": "The local provider id from GET /auth/oidc/providers.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The URL to navigate to.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OIDCLinkStart"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Re-authentication failed: wrong password, or a wrong or missing two-factor code.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "502": {
+            "description": "The identity provider could not be reached.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StepUpConfirmation"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/password": {
+      "put": {
+        "tags": [
+          "Profile"
+        ],
+        "operationId": "changePassword",
+        "summary": "Change the caller's password",
+        "description": "Any authenticated principal; CSRF required. The current password is re-verified. On success every *other* session of this user is revoked.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Changed."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "The current password is incorrect, or CSRF failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/sessions": {
+      "get": {
+        "tags": [
+          "Profile"
+        ],
+        "operationId": "listSessions",
+        "summary": "The caller's active sessions",
+        "description": "Any authenticated principal. `id` is a fingerprint derived from the session, never the cookie token.",
+        "responses": {
+          "200": {
+            "description": "Sessions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Session"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/me/sessions/{id}": {
+      "delete": {
+        "tags": [
+          "Profile"
+        ],
+        "operationId": "revokeSession",
+        "summary": "Revoke one of the caller's sessions",
+        "description": "Any authenticated principal; CSRF required. Scoped to the caller — another user's session cannot be reached.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SessionID"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/me/totp/backup-codes": {
+      "post": {
+        "tags": [
+          "Profile"
+        ],
+        "operationId": "regenerateBackupCodes",
+        "summary": "Reissue backup codes",
+        "description": "Any authenticated principal; CSRF required. Invalidates the previous set. 2FA must already be enabled.",
+        "responses": {
+          "200": {
+            "description": "The new codes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupCodes"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Re-authentication failed: wrong password, or a wrong or missing two-factor code.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StepUpConfirmation"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/totp/disable": {
+      "post": {
+        "tags": [
+          "Profile"
+        ],
+        "operationId": "disableTOTP",
+        "summary": "Turn 2FA off",
+        "description": "Any authenticated principal; CSRF required. The account password is re-checked.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StepUpConfirmation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Disabled."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Re-authentication failed: wrong password, or a wrong or missing two-factor code.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/totp/enroll": {
+      "post": {
+        "tags": [
+          "Profile"
+        ],
+        "operationId": "enrollTOTP",
+        "summary": "Begin 2FA enrolment",
+        "description": "Any authenticated principal; CSRF required. Generates a pending secret and returns the `otpauth://` URI for the QR code. 2FA is not active until the code is verified.",
+        "responses": {
+          "200": {
+            "description": "The pending secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "secret": {
+                      "type": "string"
+                    },
+                    "otpauth_uri": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Re-authentication failed: wrong password, or a wrong or missing two-factor code.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "2FA is already enabled.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StepUpConfirmation"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/totp/verify": {
+      "post": {
+        "tags": [
+          "Profile"
+        ],
+        "operationId": "verifyTOTP",
+        "summary": "Activate 2FA",
+        "description": "Any authenticated principal; CSRF required. On a valid code 2FA is enabled and a set of single-use backup codes is returned. They are shown only here.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "2FA enabled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupCodes"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/monitor-groups": {
+      "get": {
+        "tags": [
+          "Monitor groups"
+        ],
+        "operationId": "listMonitorGroups",
+        "summary": "List folders",
+        "description": "Any authenticated principal.",
+        "responses": {
+          "200": {
+            "description": "Folders in display order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MonitorGroup"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Monitor groups"
+        ],
+        "operationId": "createMonitorGroup",
+        "summary": "Create a folder",
+        "description": "Writer. CSRF required.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MonitorGroupInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonitorGroup"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/monitor-groups/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ID"
+        }
+      ],
+      "put": {
+        "tags": [
+          "Monitor groups"
+        ],
+        "operationId": "updateMonitorGroup",
+        "summary": "Rename or reorder a folder",
+        "description": "Writer. CSRF required.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MonitorGroupInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonitorGroup"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Monitor groups"
+        ],
+        "operationId": "deleteMonitorGroup",
+        "summary": "Delete a folder",
+        "description": "Writer. CSRF required. Monitors in the folder are not deleted; they become ungrouped.",
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/monitors": {
+      "get": {
+        "tags": [
+          "Monitors"
+        ],
+        "operationId": "listMonitors",
+        "summary": "List monitors",
+        "description": "Any authenticated principal.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Offset"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by current status.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "description": "Filter by monitor type.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Case-insensitive substring match on the name.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tag_id",
+            "in": "query",
+            "description": "Only monitors carrying this tag.",
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "query",
+            "description": "Only monitors in this folder.",
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of monitors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ListEnvelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Monitor"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Monitors"
+        ],
+        "operationId": "createMonitor",
+        "summary": "Create a monitor",
+        "description": "Writer. CSRF required. `config` is validated by the checker registered for `type`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MonitorInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Monitor"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/monitors/bulk": {
+      "post": {
+        "tags": [
+          "Monitors"
+        ],
+        "operationId": "bulkMonitorAction",
+        "summary": "Apply one action to many monitors",
+        "description": "Writer. CSRF required. The response reports per-monitor success, so a partial failure is visible rather than silent.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkMonitorRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Per-monitor outcomes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkMonitorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/monitors/trash": {
+      "get": {
+        "tags": [
+          "Monitors"
+        ],
+        "operationId": "listDeletedMonitors",
+        "summary": "List the monitor recycle bin",
+        "description": "Writer. Monitors deleted but not yet purged, most recently deleted first. Deleting a monitor is a soft delete: its heartbeats, tags, channel links and status-page placements are kept, and every other endpoint stops seeing it. Entries are removed for good after TRASH_RETENTION_DAYS, or immediately via the purge endpoint.",
+        "responses": {
+          "200": {
+            "description": "The bin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Monitor"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/monitors/events": {
+      "get": {
+        "tags": [
+          "Monitors"
+        ],
+        "operationId": "listMonitorEvents",
+        "summary": "List state transitions across all monitors",
+        "description": "Every live monitor's important heartbeats (status changes), newest first, paged. Soft-deleted monitors are excluded. The dashboard home's event log; the per-monitor equivalent is /monitors/{id}/heartbeats?important=true.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Offset"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of transitions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ListEnvelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Heartbeat"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/monitors/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ID"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Monitors"
+        ],
+        "operationId": "getMonitor",
+        "summary": "Read one monitor",
+        "description": "Any authenticated principal.",
+        "responses": {
+          "200": {
+            "description": "The monitor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Monitor"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Monitors"
+        ],
+        "operationId": "updateMonitor",
+        "summary": "Replace a monitor",
+        "description": "Writer. CSRF required. This is a full replacement, not a patch.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MonitorInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated monitor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Monitor"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Monitors"
+        ],
+        "operationId": "deleteMonitor",
+        "summary": "Delete a monitor",
+        "description": "Writer. CSRF required. A SOFT delete: the monitor moves to the recycle bin with its heartbeats and associations intact, stops being checked, and disappears from every other read. GET /monitors/trash lists it, POST /monitors/{id}/restore brings it back (paused), and DELETE /monitors/{id}/purge destroys it for good. The bin is also emptied automatically once an entry has been in it longer than TRASH_RETENTION_DAYS.",
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/monitors/{id}/restore": {
+      "post": {
+        "tags": [
+          "Monitors"
+        ],
+        "operationId": "restoreMonitor",
+        "summary": "Restore a monitor from the recycle bin",
+        "description": "Writer. CSRF required. The monitor comes back PAUSED: the store cannot know whether it was active before the delete, and resuming checks — and alerts — for something that has been gone for days is not what a restore should do on its own. 404 for a monitor that is not in the bin.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Restored, paused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Monitor"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/monitors/{id}/purge": {
+      "delete": {
+        "tags": [
+          "Monitors"
+        ],
+        "operationId": "purgeMonitor",
+        "summary": "Destroy a binned monitor permanently",
+        "description": "Admin. CSRF required. Hard-deletes a monitor that is ALREADY in the recycle bin, taking its entire heartbeat history with it. This cannot be undone. It answers 404 for a live monitor: the only route to an irreversible delete runs through the bin, so there is always a window in which a mistake can be reversed. Admin-only for the same reason.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ID"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Destroyed."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/monitors/{id}/check": {
+      "post": {
+        "tags": [
+          "Monitors"
+        ],
+        "operationId": "checkMonitorNow",
+        "summary": "Run a check immediately",
+        "description": "Writer. CSRF required. Asks the engine to probe now, out of schedule.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ID"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Check requested."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/monitors/{id}/heartbeats": {
+      "get": {
+        "tags": [
+          "Monitors"
+        ],
+        "operationId": "listMonitorHeartbeats",
+        "summary": "Recent heartbeats",
+        "description": "Any authenticated principal.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ID"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Offset"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Heartbeats, newest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Heartbeat"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/monitors/{id}/pause": {
+      "post": {
+        "tags": [
+          "Monitors"
+        ],
+        "operationId": "pauseMonitor",
+        "summary": "Pause a monitor",
+        "description": "Writer. CSRF required.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The paused monitor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Monitor"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/monitors/{id}/push-token": {
+      "post": {
+        "tags": [
+          "Monitors"
+        ],
+        "operationId": "regeneratePushToken",
+        "summary": "Rotate a passive monitor's push token",
+        "description": "Writer. CSRF required. The previous token stops working immediately.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The monitor carrying its new push token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Monitor"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/monitors/{id}/badge": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ID"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Monitors"
+        ],
+        "operationId": "createMonitorBadge",
+        "summary": "Mint the monitor's embeddable badge token",
+        "description": "Writer. CSRF required. Returns the monitor's opaque badge token and the ready-to-embed status/uptime badge URLs. Idempotent: a monitor that already has a badge keeps the same token.",
+        "responses": {
+          "200": {
+            "description": "The badge token and its badge URLs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "badge_token": {
+                      "type": "string"
+                    },
+                    "status_url": {
+                      "type": "string"
+                    },
+                    "uptime_url": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Monitors"
+        ],
+        "operationId": "revokeMonitorBadge",
+        "summary": "Revoke the monitor's badge token",
+        "description": "Writer. CSRF required. The badge URLs stop resolving immediately. Idempotent.",
+        "responses": {
+          "204": {
+            "description": "Revoked."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/monitors/{id}/report": {
+      "get": {
+        "tags": [
+          "Reporting"
+        ],
+        "operationId": "getMonitorReport",
+        "summary": "Detailed report for a monitor",
+        "description": "Any authenticated principal. Uptime, incident and latency detail over the requested range.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ID"
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Inclusive start (RFC 3339).",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Exclusive end (RFC 3339).",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/monitors/{id}/resume": {
+      "post": {
+        "tags": [
+          "Monitors"
+        ],
+        "operationId": "resumeMonitor",
+        "summary": "Resume a monitor",
+        "description": "Writer. CSRF required.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The resumed monitor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Monitor"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/monitors/{id}/status": {
+      "get": {
+        "tags": [
+          "Monitors"
+        ],
+        "operationId": "getMonitorStatus",
+        "summary": "Live status",
+        "description": "Any authenticated principal. Reads the engine's in-memory state, falling back to the last persisted heartbeat.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The current status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/monitors/{id}/uptime": {
+      "get": {
+        "tags": [
+          "Reporting"
+        ],
+        "operationId": "getMonitorUptime",
+        "summary": "Uptime percentages for a monitor",
+        "description": "Any authenticated principal.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ID"
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "description": "Reporting window, e.g. `24h`, `30d`, `1y`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Uptime summary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/notifications": {
+      "get": {
+        "tags": [
+          "Notifications"
+        ],
+        "operationId": "listNotifications",
+        "summary": "List notification channels",
+        "description": "Any authenticated principal. Secret config fields are redacted.",
+        "responses": {
+          "200": {
+            "description": "Channels.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Notification"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Notifications"
+        ],
+        "operationId": "createNotification",
+        "summary": "Create a notification channel",
+        "description": "Writer. CSRF required. `config` is validated by the provider registered for `type` and sealed at rest.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Notification"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ID"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Notifications"
+        ],
+        "operationId": "getNotification",
+        "summary": "Read one channel",
+        "description": "Any authenticated principal. Secret config fields are redacted.",
+        "responses": {
+          "200": {
+            "description": "The channel.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Notification"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Notifications"
+        ],
+        "operationId": "updateNotification",
+        "summary": "Replace a channel",
+        "description": "Writer. CSRF required.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Notification"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Notifications"
+        ],
+        "operationId": "deleteNotification",
+        "summary": "Delete a channel",
+        "description": "Writer. CSRF required.",
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/{id}/test": {
+      "post": {
+        "tags": [
+          "Notifications"
+        ],
+        "operationId": "testNotification",
+        "summary": "Send a test notification",
+        "description": "Writer. CSRF required. Delivers a synthetic event through the channel and reports the provider's outcome.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The delivery outcome.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "operationId": "getOpenAPISpec",
+        "summary": "This document",
+        "description": "Public. Returns this OpenAPI description. It contains no instance data — only the shape of the API — which is why it needs no credential.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The OpenAPI 3.1 document.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "operationId": "getAPIDocs",
+        "summary": "Interactive API reference",
+        "description": "Public. Returns an HTML page that renders this document in the browser and can issue requests against the live instance. It fetches `/api/v1/openapi.json` at runtime and embeds no copy of the API surface, so it cannot drift from the spec. Served from the binary with no external assets, so it works offline and air-gapped.\n\nIntended for a browser. A programmatic client wants the JSON document instead.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The documentation page.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/public/status": {
+      "get": {
+        "tags": [
+          "Public"
+        ],
+        "operationId": "getPublicStatusPageByHost",
+        "summary": "Render the status page bound to this host",
+        "description": "Public and rate limited. Resolves the page from the request Host header (custom-domain routing).",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The rendered page payload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The page is password protected.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/public/status/{slug}": {
+      "get": {
+        "tags": [
+          "Public"
+        ],
+        "operationId": "getPublicStatusPage",
+        "summary": "Render a status page",
+        "description": "Public and rate limited. A password-protected page requires the page password.",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Slug"
+          },
+          {
+            "name": "password",
+            "in": "query",
+            "description": "Page access password, when the page is protected.",
+            "schema": {
+              "type": "string",
+              "format": "password"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rendered page payload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The page is password protected.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/public/status/{slug}/badge.svg": {
+      "get": {
+        "tags": [
+          "Public"
+        ],
+        "operationId": "getPublicStatusPageBadge",
+        "summary": "Overall badge for a status page",
+        "description": "Public and rate limited.",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Slug"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The badge.",
+            "content": {
+              "image/svg+xml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/public/status/{slug}/history": {
+      "get": {
+        "tags": [
+          "Public"
+        ],
+        "operationId": "getPublicStatusHistory",
+        "summary": "Availability archive for a status page",
+        "description": "Public and rate limited. Month-by-month availability over `months` calendar months (default 24, capped at 120); an out-of-range value is clamped rather than rejected, because a stray link must not become an error screen for a visitor. Monitors the page marks `show_uptime: false` are omitted entirely. A password-protected page requires the same password as the page itself.",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Slug"
+          },
+          {
+            "name": "months",
+            "in": "query",
+            "description": "Calendar months to include, newest last. Never rejected: above 120 is clamped to 120, and below 1 (or unparseable) falls back to the default of 24 rather than answering 400. This is a zoom level on a public page, and a stray link must not become an error screen for a visitor who cannot fix it \u2014 which is also why the schema states no minimum: one would promise a rejection that never happens.",
+            "schema": {
+              "type": "integer",
+              "maximum": 120,
+              "default": 24
+            }
+          },
+          {
+            "name": "password",
+            "in": "query",
+            "description": "Page access password, when the page is protected.",
+            "schema": {
+              "type": "string",
+              "format": "password"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The archive payload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicHistory"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The page is password protected.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/push/{token}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/PushToken"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Public"
+        ],
+        "operationId": "pushHeartbeatPost",
+        "summary": "Record a push heartbeat",
+        "description": "Public and rate limited. The token identifies the passive monitor; it is the only credential. POST only: a heartbeat is a state-changing report, so it must not be triggerable by a link prefetcher, crawler or embedded image.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "`up` (default) or `down`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "msg",
+            "in": "query",
+            "description": "Free-text message stored with the heartbeat.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ping",
+            "in": "query",
+            "description": "Reported latency in milliseconds.",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recorded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/registry/monitor-types": {
+      "get": {
+        "tags": [
+          "Registry"
+        ],
+        "operationId": "listMonitorTypes",
+        "summary": "Registered monitor types",
+        "description": "Any authenticated principal. `passive` marks push-style types, which are configured rather than probed.",
+        "responses": {
+          "200": {
+            "description": "The registered types.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MonitorTypeInfo"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/registry/notification-types": {
+      "get": {
+        "tags": [
+          "Registry"
+        ],
+        "operationId": "listNotificationTypes",
+        "summary": "Registered notification providers",
+        "description": "Any authenticated principal. Per-field form metadata is authored in the frontend, not served here.",
+        "responses": {
+          "200": {
+            "description": "The registered providers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationTypeInfo"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/report/certificates": {
+      "get": {
+        "tags": [
+          "Reporting"
+        ],
+        "operationId": "getCertificateOverview",
+        "summary": "TLS certificate expiry overview",
+        "description": "Any authenticated principal.",
+        "responses": {
+          "200": {
+            "description": "Certificates and their remaining validity.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/CertRow"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/report/flakiest": {
+      "get": {
+        "tags": [
+          "Reporting"
+        ],
+        "operationId": "getFlakiestMonitors",
+        "summary": "Monitors that flap the most",
+        "description": "Any authenticated principal. Ranked by status transitions over the window.",
+        "responses": {
+          "200": {
+            "description": "Ranked monitors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/report/sla.csv": {
+      "get": {
+        "tags": [
+          "Reporting"
+        ],
+        "operationId": "getSLACSV",
+        "summary": "SLA report as CSV",
+        "description": "Any authenticated principal.",
+        "responses": {
+          "200": {
+            "description": "CSV download.",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/report/sla.pdf": {
+      "get": {
+        "tags": [
+          "Reporting"
+        ],
+        "operationId": "getSLAPDF",
+        "summary": "SLA report as PDF",
+        "description": "Any authenticated principal. Not implemented yet — the endpoint exists and reports 501 so the contract is stable.",
+        "responses": {
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "501": {
+            "description": "PDF export is not implemented.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings": {
+      "get": {
+        "tags": [
+          "Administration"
+        ],
+        "operationId": "listSettings",
+        "summary": "List runtime settings",
+        "description": "Admin.",
+        "responses": {
+          "200": {
+            "description": "Settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Setting"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/settings/{key}": {
+      "put": {
+        "tags": [
+          "Administration"
+        ],
+        "operationId": "setSetting",
+        "summary": "Write one runtime setting",
+        "description": "Admin. CSRF required. The body is the setting's JSON value, stored verbatim.",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "description": "Setting key.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "description": "Any JSON value."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The stored setting.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Setting"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/setup": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "getSetupStatus",
+        "summary": "Whether first-run setup is still pending",
+        "description": "Public. The SPA calls this before showing the setup wizard.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Setup status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "needs_setup"
+                  ],
+                  "properties": {
+                    "needs_setup": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "runSetup",
+        "summary": "Create the initial admin account",
+        "description": "Public, but only while no user exists; afterwards it is refused. On success a session is issued.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Admin created and signed in.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          }
+        }
+      }
+    },
+    "/api/v1/status-pages": {
+      "get": {
+        "tags": [
+          "Status pages"
+        ],
+        "operationId": "listStatusPages",
+        "summary": "List status pages",
+        "description": "Any authenticated principal.",
+        "responses": {
+          "200": {
+            "description": "Pages.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatusPage"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Status pages"
+        ],
+        "operationId": "createStatusPage",
+        "summary": "Create a status page",
+        "description": "Writer. CSRF required. `logo_path` is accepted and ignored — the logo is owned by the upload endpoints.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusPageInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/status-pages/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ID"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Status pages"
+        ],
+        "operationId": "getStatusPage",
+        "summary": "Read one status page",
+        "description": "Any authenticated principal. The access password is never returned; `has_password` is the derived flag.",
+        "responses": {
+          "200": {
+            "description": "The page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Status pages"
+        ],
+        "operationId": "updateStatusPage",
+        "summary": "Replace a status page",
+        "description": "Writer. CSRF required.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusPageInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Status pages"
+        ],
+        "operationId": "deleteStatusPage",
+        "summary": "Delete a status page",
+        "description": "Writer. CSRF required.",
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/status-pages/{id}/incidents": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ID"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Status pages"
+        ],
+        "operationId": "listIncidents",
+        "summary": "List a page's incidents",
+        "description": "Any authenticated principal.",
+        "responses": {
+          "200": {
+            "description": "Incidents.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Incident"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Status pages"
+        ],
+        "operationId": "createIncident",
+        "summary": "Open an incident",
+        "description": "Writer. CSRF required.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IncidentInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Incident"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/status-pages/{id}/incidents/{incID}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ID"
+        },
+        {
+          "$ref": "#/components/parameters/IncidentID"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Status pages"
+        ],
+        "operationId": "getIncident",
+        "summary": "Read one incident with its timeline",
+        "description": "Any authenticated principal.",
+        "responses": {
+          "200": {
+            "description": "The incident.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Incident"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Status pages"
+        ],
+        "operationId": "updateIncident",
+        "summary": "Replace an incident",
+        "description": "Writer. CSRF required.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IncidentInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Incident"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Status pages"
+        ],
+        "operationId": "deleteIncident",
+        "summary": "Delete an incident",
+        "description": "Writer. CSRF required.",
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/status-pages/{id}/incidents/{incID}/updates": {
+      "post": {
+        "tags": [
+          "Status pages"
+        ],
+        "operationId": "addIncidentUpdate",
+        "summary": "Post an incident update",
+        "description": "Writer. CSRF required. Appends to the timeline and advances the incident's lifecycle status.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ID"
+          },
+          {
+            "$ref": "#/components/parameters/IncidentID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IncidentUpdateInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Posted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Incident"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/status-pages/{id}/incidents/{incID}/postmortem": {
+      "put": {
+        "tags": [
+          "Status pages"
+        ],
+        "operationId": "setIncidentPostmortem",
+        "summary": "Write or publish an incident postmortem",
+        "description": "Writer. CSRF required. Replaces only the retrospective and its publication state; every other field of the incident is untouched, so a concurrent edit cannot be clobbered. Publishing requires a non-empty body and an incident whose status is `resolved` (409 otherwise). Re-publishing keeps the original publication timestamp.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ID"
+          },
+          {
+            "$ref": "#/components/parameters/IncidentID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IncidentPostmortemInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Incident"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/status-pages/{id}/layout": {
+      "patch": {
+        "tags": [
+          "Status pages"
+        ],
+        "operationId": "reorderStatusPageLayout",
+        "summary": "Reorder groups and monitors",
+        "description": "Writer. CSRF required. The payload must be a COMPLETE ordering: every group and every monitor currently on the page, each named exactly once. A partial ordering is rejected, which doubles as an optimistic concurrency check.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LayoutReorderRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The reordered page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/status-pages/{id}/logo": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ID"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Status pages"
+        ],
+        "operationId": "uploadStatusPageLogo",
+        "summary": "Upload a status-page logo",
+        "description": "Writer. CSRF required. Acceptance is decided by sniffing the leading bytes — PNG, JPEG and WebP only — never by the declared part content type or the file name. SVG is refused. Size and pixel dimensions are capped.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "logo"
+                ],
+                "properties": {
+                  "logo": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "The image file."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The page carrying its new `logo_path`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "description": "The upload exceeds the size limit.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Not an accepted image type.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Status pages"
+        ],
+        "operationId": "deleteStatusPageLogo",
+        "summary": "Remove a status-page logo",
+        "description": "Writer. CSRF required. Idempotent: removing an absent logo still succeeds.",
+        "responses": {
+          "204": {
+            "description": "Removed."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/tags": {
+      "get": {
+        "tags": [
+          "Tags"
+        ],
+        "operationId": "listTags",
+        "summary": "List tags",
+        "description": "Any authenticated principal.",
+        "responses": {
+          "200": {
+            "description": "Tags.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Tag"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Tags"
+        ],
+        "operationId": "createTag",
+        "summary": "Create a tag",
+        "description": "Writer. CSRF required.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TagInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tag"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/tags/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ID"
+        }
+      ],
+      "put": {
+        "tags": [
+          "Tags"
+        ],
+        "operationId": "updateTag",
+        "summary": "Update a tag",
+        "description": "Writer. CSRF required.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TagInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tag"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Tags"
+        ],
+        "operationId": "deleteTag",
+        "summary": "Delete a tag",
+        "description": "Writer. CSRF required.",
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/users": {
+      "get": {
+        "tags": [
+          "Administration"
+        ],
+        "operationId": "listUsers",
+        "summary": "List users",
+        "description": "Admin.",
+        "responses": {
+          "200": {
+            "description": "Users.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/User"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Administration"
+        ],
+        "operationId": "createUser",
+        "summary": "Create a user",
+        "description": "Admin. CSRF required.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUserRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ID"
+        }
+      ],
+      "put": {
+        "tags": [
+          "Administration"
+        ],
+        "operationId": "updateUser",
+        "summary": "Update a user",
+        "description": "Admin. CSRF required. Does not change the password.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateUserRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Administration"
+        ],
+        "operationId": "deleteUser",
+        "summary": "Delete a user",
+        "description": "Admin. CSRF required. Deleting the last remaining admin is refused.",
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/version": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "operationId": "getVersion",
+        "summary": "Build metadata",
+        "description": "Public. Reports the version, commit and build date injected at link time.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Build metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionInfo"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "operationId": "getHealthz",
+        "summary": "Liveness probe",
+        "description": "Public. Answers as soon as the process is serving; it does not touch the database.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The process is alive.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "operationId": "getMetrics",
+        "summary": "Prometheus exposition",
+        "description": "Present only when metrics are enabled. May be gated behind a bearer token, in which case an unauthenticated scrape is refused. The endpoint is registered for all HTTP methods; only GET is meaningful.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Metrics in Prometheus text exposition format.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A metrics token is configured and was not supplied."
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "operationId": "getReadyz",
+        "summary": "Readiness probe",
+        "description": "Public. Pings the database with a short timeout. Reports 503 when no pool is configured or the database is unreachable.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Database reachable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database not configured or unreachable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/uploads/avatars/{name}": {
+      "get": {
+        "tags": [
+          "Public"
+        ],
+        "operationId": "getAvatar",
+        "summary": "Serve an uploaded avatar",
+        "description": "Unauthenticated, like the logo route. The file name is server-minted and carries 128 bits of entropy, and that unguessability is the only access control: anyone holding the URL can fetch the image, and the immutable caching means a proxy may retain it after deletion. Served with nosniff, a restrictive Content-Security-Policy and inline disposition.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "The server-generated file name, as returned by the upload endpoint.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The image.",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such avatar."
+          }
+        }
+      }
+    },
+    "/uploads/logos/{name}": {
+      "get": {
+        "tags": [
+          "Public"
+        ],
+        "operationId": "getStatusPageLogo",
+        "summary": "Serve an uploaded status-page logo",
+        "description": "Public: logos are rendered by anonymous visitors of a public status page. The file name is server-minted and unguessable; anything not matching that shape is a 404. Served with `X-Content-Type-Options: nosniff`, a restrictive `Content-Security-Policy` and immutable caching.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "The server-generated file name, as returned by the upload endpoint.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The image.",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such logo."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "sessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "statwarden_session",
+        "description": "Browser session cookie, issued by `POST /api/v1/auth/login`. HttpOnly. Every mutating request must ALSO send the `X-CSRF-Token` header carrying the value of the readable `statwarden_csrf` cookie."
+      },
+      "apiKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "An API key secret, as returned once by `POST /api/v1/me/api-keys`. Bearer principals are exempt from CSRF — do not send `X-CSRF-Token` with one. The key's scopes (`read`, `write`, `admin`) are checked in addition to the owning user's role."
+      }
+    },
+    "parameters": {
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "description": "Page size. Defaults to 50, capped at 200. A non-positive or unparseable value falls back to the default.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "default": 50
+        }
+      },
+      "Offset": {
+        "name": "offset",
+        "in": "query",
+        "description": "Number of items to skip. Defaults to 0.",
+        "schema": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        }
+      },
+      "ID": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Resource id.",
+        "schema": {
+          "type": "integer",
+          "format": "int64",
+          "minimum": 1
+        }
+      },
+      "IncidentID": {
+        "name": "incID",
+        "in": "path",
+        "required": true,
+        "description": "Incident id.",
+        "schema": {
+          "type": "integer",
+          "format": "int64",
+          "minimum": 1
+        }
+      },
+      "SessionID": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Session fingerprint, as returned by `GET /api/v1/me/sessions`.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Slug": {
+        "name": "slug",
+        "in": "path",
+        "required": true,
+        "description": "Status page slug.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "PushToken": {
+        "name": "token",
+        "in": "path",
+        "required": true,
+        "description": "The passive monitor's push token.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "BadgeToken": {
+        "name": "token",
+        "in": "path",
+        "required": true,
+        "description": "The monitor's opaque badge token, minted via `POST /api/v1/monitors/{id}/badge`.",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "The request body or a parameter is invalid. Unknown JSON fields are rejected outright.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "No valid session or API key was presented.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Authenticated, but the role or API-key scope is insufficient — or the CSRF header is missing or does not match the cookie.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "No such resource.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "The resource already exists, or the state transition is not allowed.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Too many requests from this client IP.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Internal": {
+        "description": "Unexpected server-side failure.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Unavailable": {
+        "description": "The optional subsystem backing this endpoint is not configured in this deployment.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "APIKey": {
+        "type": "object",
+        "description": "A scoped programmatic credential. The secret is never in this object.",
+        "required": [
+          "id",
+          "user_id",
+          "name",
+          "prefix",
+          "scopes",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "user_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string",
+            "description": "The leading, non-secret part of the key, for identifying it in a list."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "read",
+                "write",
+                "admin"
+              ]
+            }
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "APIKeyCreateRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "scopes",
+          "password"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "read",
+                "write",
+                "admin"
+              ]
+            }
+          },
+          "expires_in_days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3650,
+            "description": "The key's lifetime in whole days from now. Omit the field for a key that never expires; 0 is rejected, so that \"no expiry\" cannot be requested by accident. The resulting instant is returned as expires_at, and the key is refused from that moment on."
+          },
+          "password": {
+            "type": "string",
+            "description": "The caller's current password."
+          },
+          "totp_code": {
+            "type": "string",
+            "description": "A current authenticator code, or one of the caller's backup codes. Required when the account has two-factor authentication enabled; a backup code is consumed when it is the one that matched."
+          }
+        }
+      },
+      "APIKeyCreated": {
+        "type": "object",
+        "required": [
+          "api_key",
+          "secret"
+        ],
+        "properties": {
+          "api_key": {
+            "$ref": "#/components/schemas/APIKey"
+          },
+          "secret": {
+            "type": "string",
+            "description": "The bearer secret. Shown here and never again."
+          }
+        }
+      },
+      "AuditEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "action",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "user_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "action": {
+            "type": "string",
+            "description": "Dotted action name, e.g. `user.login`."
+          },
+          "entity_type": {
+            "type": "string"
+          },
+          "entity_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "details": {
+            "type": "object",
+            "description": "Action-specific context. Never contains secrets."
+          },
+          "ip": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CertRow": {
+        "type": "object",
+        "required": [
+          "monitor_id",
+          "monitor_name",
+          "valid_to",
+          "days_remaining",
+          "expired"
+        ],
+        "properties": {
+          "monitor_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "monitor_name": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "valid_to": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "days_remaining": {
+            "type": "integer",
+            "description": "Whole days until expiry. NEGATIVE once the certificate has lapsed."
+          },
+          "expired": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AuthResult": {
+        "type": "object",
+        "description": "The signed-in user plus the CSRF token to echo on subsequent mutations. The session itself lives in the `statwarden_session` cookie.",
+        "required": [
+          "user",
+          "csrf_token"
+        ],
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/User"
+          },
+          "csrf_token": {
+            "type": "string"
+          }
+        }
+      },
+      "BackupCodes": {
+        "type": "object",
+        "required": [
+          "backup_codes"
+        ],
+        "properties": {
+          "backup_codes": {
+            "type": "array",
+            "description": "Single-use recovery codes, returned in plaintext exactly once. The server stores only their hashes.",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "BulkMonitorRequest": {
+        "type": "object",
+        "required": [
+          "action",
+          "monitor_ids"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "The action to apply to every listed monitor."
+          },
+          "monitor_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "tag_ids": {
+            "type": "array",
+            "description": "Required by the `tag` action, ignored otherwise.",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "group_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Used by the `group` action; null clears the folder."
+          }
+        }
+      },
+      "BulkMonitorResponse": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "monitor_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "error": {
+                  "type": "string",
+                  "description": "Short client-facing reason; empty when OK."
+                }
+              }
+            }
+          }
+        }
+      },
+      "ChangeEmailRequest": {
+        "type": "object",
+        "required": [
+          "current_password",
+          "email"
+        ],
+        "properties": {
+          "current_password": {
+            "type": "string",
+            "description": "The caller's current password. The e-mail address is the account recovery channel, so changing it is re-authenticated exactly like a password change."
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          }
+        }
+      },
+      "ChangePasswordRequest": {
+        "type": "object",
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "properties": {
+          "current_password": {
+            "type": "string",
+            "format": "password"
+          },
+          "new_password": {
+            "type": "string",
+            "format": "password",
+            "minLength": 8
+          }
+        }
+      },
+      "CreateUserRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "minLength": 8
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "viewer",
+              "user",
+              "admin"
+            ],
+            "default": "viewer"
+          }
+        }
+      },
+      "ExternalIdentity": {
+        "type": "object",
+        "description": "A link between a local account and an account at an identity provider. The join key is (issuer, subject); the e-mail address is display-only and is never used to resolve an account.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_login_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "Heartbeat": {
+        "type": "object",
+        "required": [
+          "monitor_id",
+          "checked_at",
+          "status",
+          "important",
+          "retries"
+        ],
+        "properties": {
+          "monitor_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          },
+          "latency_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "important": {
+            "type": "boolean",
+            "description": "True when this heartbeat changed the monitor's status."
+          },
+          "retries": {
+            "type": "integer"
+          },
+          "extra": {
+            "type": "object",
+            "description": "Type-specific detail, e.g. certificate info."
+          }
+        }
+      },
+      "Incident": {
+        "type": "object",
+        "required": [
+          "id",
+          "status_page_id",
+          "title",
+          "severity",
+          "status",
+          "pinned",
+          "started_at",
+          "monitor_ids",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status_page_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "investigating",
+              "identified",
+              "monitoring",
+              "resolved"
+            ]
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "resolved_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "monitor_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "updates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IncidentUpdate"
+            }
+          },
+          "postmortem": {
+            "type": "string",
+            "description": "Retrospective written after the incident closed (Markdown). Absent on the public status page unless postmortem_published_at is set."
+          },
+          "postmortem_published_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the retrospective was published. ABSENT \u2014 not null \u2014 while it is still a draft: the field is omitempty, so a draft carries no key at all."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "IncidentInput": {
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "investigating",
+              "identified",
+              "monitoring",
+              "resolved"
+            ]
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "monitor_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        }
+      },
+      "IncidentUpdate": {
+        "type": "object",
+        "required": [
+          "id",
+          "incident_id",
+          "status",
+          "body",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "incident_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "created_by": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "IncidentUpdateInput": {
+        "type": "object",
+        "required": [
+          "status",
+          "body"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "investigating",
+              "identified",
+              "monitoring",
+              "resolved"
+            ]
+          },
+          "body": {
+            "type": "string"
+          }
+        }
+      },
+      "IncidentPostmortemInput": {
+        "type": "object",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "maxLength": 65536,
+            "description": "The retrospective, Markdown. Empty clears it."
+          },
+          "published": {
+            "type": "boolean",
+            "default": false,
+            "description": "Publish to the public status page. Requires a non-empty body and a resolved incident."
+          }
+        }
+      },
+      "LayoutReorderRequest": {
+        "type": "object",
+        "description": "A COMPLETE re-statement of a page's display order. Every group and every monitor currently on the page must appear exactly once.",
+        "required": [
+          "ungrouped",
+          "groups"
+        ],
+        "properties": {
+          "ungrouped": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "group_id",
+                "monitor_ids"
+              ],
+              "properties": {
+                "group_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "monitor_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int64"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "ListEnvelope": {
+        "type": "object",
+        "description": "The paginated list shape shared by every list endpoint that pages.",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {}
+          },
+          "total": {
+            "type": "integer",
+            "description": "Total matching rows, ignoring the page window."
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "password": {
+            "type": "string",
+            "format": "password"
+          },
+          "totp_code": {
+            "type": "string",
+            "description": "Required when the account has 2FA enabled."
+          },
+          "backup_code": {
+            "type": "string",
+            "description": "A single-use backup code, accepted in place of `totp_code`."
+          }
+        }
+      },
+      "MaintenanceInput": {
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "active": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Omitted means active."
+          },
+          "strategy": {
+            "type": "string",
+            "description": "Omitted means `single`."
+          },
+          "starts_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "ends_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "recurrence": {
+            "type": "object"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "monitor_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        }
+      },
+      "MaintenanceWindow": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "active",
+          "strategy",
+          "timezone",
+          "monitor_ids",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "strategy": {
+            "type": "string",
+            "description": "How the window recurs; `single` is a one-off."
+          },
+          "starts_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "ends_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "recurrence": {
+            "type": "object",
+            "description": "Strategy-specific recurrence rule."
+          },
+          "timezone": {
+            "type": "string",
+            "description": "IANA zone the window is evaluated in."
+          },
+          "monitor_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Monitor": {
+        "type": "object",
+        "description": "The read shape of a monitor: a superset of MonitorInput plus derived state.",
+        "required": [
+          "id",
+          "name",
+          "type",
+          "config",
+          "interval_seconds",
+          "status",
+          "active",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "description": "A type from `GET /api/v1/registry/monitor-types`."
+          },
+          "config": {
+            "type": "object",
+            "description": "Type-specific configuration, validated by that type's checker."
+          },
+          "interval_seconds": {
+            "type": "integer"
+          },
+          "timeout_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max_retries": {
+            "type": "integer"
+          },
+          "recovery_checks": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Consecutive successful checks a DOWN monitor needs before it counts as UP again."
+          },
+          "retry_interval_seconds": {
+            "type": "integer"
+          },
+          "resend_interval_minutes": {
+            "type": "integer"
+          },
+          "upside_down": {
+            "type": "boolean",
+            "description": "Inverts the verdict: a reachable target counts as down."
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "description": "Current status: pending, up, down, paused or maintenance."
+          },
+          "parent_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "group_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "push_token": {
+            "type": "string",
+            "description": "Present only for passive (push) monitors."
+          },
+          "description": {
+            "type": "string"
+          },
+          "link_url": {
+            "type": "string"
+          },
+          "tag_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "notification_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "url": {
+            "type": "string",
+            "description": "Read-only display target lifted out of `config`. Ignored on write."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "latency_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "last_checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "uptime_24h": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "uptime_30d": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "uptime_1y": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "sparkline": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "recent_beats": {
+            "type": "array",
+            "description": "Status of the newest heartbeats (at most 50), oldest first: the per-check bar of the monitor list. Unlike sparkline it keeps beats without a latency, so a DOWN check is never dropped.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "up",
+                "down",
+                "pending",
+                "maintenance"
+              ]
+            }
+          },
+          "scheduling_error": {
+            "type": "string",
+            "description": "Present only when the write succeeded but the scheduler refused the monitor: the row is active and nothing is checking it. Absent on every normal response. Returned by POST /monitors and PUT /monitors/{id}, which still answer 201/200 because the resource does exist — a 5xx there would invite a retry that creates a duplicate."
+          }
+        }
+      },
+      "MonitorGroup": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "sort_order",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sort_order": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "MonitorGroupInput": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "sort_order": {
+            "type": "integer"
+          }
+        }
+      },
+      "MonitorInput": {
+        "type": "object",
+        "description": "The write shape of a monitor. Unknown fields are rejected.",
+        "required": [
+          "name",
+          "type",
+          "interval_seconds"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "config": {
+            "type": "object",
+            "description": "Type-specific configuration. Defaults to `{}` when omitted."
+          },
+          "interval_seconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "timeout_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max_retries": {
+            "type": "integer"
+          },
+          "recovery_checks": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Consecutive successful checks a DOWN monitor needs before it counts as UP again. Omitted or 0 means 1."
+          },
+          "retry_interval_seconds": {
+            "type": "integer",
+            "description": "Defaults to `interval_seconds` when below 1."
+          },
+          "resend_interval_minutes": {
+            "type": "integer"
+          },
+          "upside_down": {
+            "type": "boolean"
+          },
+          "active": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Omitted means active."
+          },
+          "parent_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "group_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "description": {
+            "type": "string"
+          },
+          "link_url": {
+            "type": "string"
+          },
+          "tag_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "notification_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        }
+      },
+      "MonitorTypeInfo": {
+        "type": "object",
+        "required": [
+          "type",
+          "passive"
+        ],
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "passive": {
+            "type": "boolean",
+            "description": "True for push-style types, which are not probed on a schedule."
+          }
+        }
+      },
+      "Notification": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "type",
+          "config",
+          "is_default",
+          "active",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "description": "A provider from `GET /api/v1/registry/notification-types`."
+          },
+          "config": {
+            "type": "object",
+            "description": "Provider configuration. Secret fields are redacted on read and sealed at rest."
+          },
+          "is_default": {
+            "type": "boolean",
+            "description": "Attached to newly created monitors."
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "NotificationInput": {
+        "type": "object",
+        "required": [
+          "name",
+          "type"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "config": {
+            "type": "object"
+          },
+          "is_default": {
+            "type": "boolean"
+          },
+          "active": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Omitted means active."
+          }
+        }
+      },
+      "NotificationTypeInfo": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "OIDCLinkStart": {
+        "type": "object",
+        "properties": {
+          "authorize_url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
+      "OIDCProviderInfo": {
+        "type": "object",
+        "description": "A configured identity provider, as advertised to the login page. Carries no client credentials.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          }
+        }
+      },
+      "PasswordResetAccepted": {
+        "type": "object",
+        "description": "The single response the request endpoint ever returns, whatever the outcome.",
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "PasswordResetConfirmRequest": {
+        "type": "object",
+        "required": [
+          "token",
+          "new_password"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "The opaque token from the mailed link."
+          },
+          "new_password": {
+            "type": "string",
+            "format": "password",
+            "minLength": 8
+          }
+        }
+      },
+      "PasswordResetRequest": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "description": "RFC 7807 problem detail. Served as `application/problem+json`.",
+        "required": [
+          "title",
+          "status"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Always `about:blank`; the status code carries the meaning."
+          },
+          "title": {
+            "type": "string",
+            "description": "The HTTP status text."
+          },
+          "status": {
+            "type": "integer",
+            "description": "The HTTP status code."
+          },
+          "detail": {
+            "type": "string",
+            "description": "A human-readable explanation. Absent on the router's own 404/405."
+          }
+        }
+      },
+      "Session": {
+        "type": "object",
+        "description": "A server-side session. `id` is a fingerprint, never the cookie token.",
+        "required": [
+          "id",
+          "user_id",
+          "created_at",
+          "expires_at",
+          "last_seen_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ip": {
+            "type": "string"
+          },
+          "user_agent": {
+            "type": "string"
+          }
+        }
+      },
+      "Setting": {
+        "type": "object",
+        "required": [
+          "key",
+          "value",
+          "updated_at"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "description": "Any JSON value."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SetupRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "minLength": 8
+          },
+          "display_name": {
+            "type": "string"
+          }
+        }
+      },
+      "StatusPage": {
+        "type": "object",
+        "required": [
+          "id",
+          "slug",
+          "title",
+          "published",
+          "allow_indexing",
+          "has_password",
+          "view_count",
+          "monitor_ids",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "footer_text": {
+            "type": "string"
+          },
+          "theme": {
+            "type": "string"
+          },
+          "logo_path": {
+            "type": "string",
+            "description": "Server-owned. Written only by the logo endpoints; a client PUT cannot set it."
+          },
+          "custom_domain": {
+            "type": "string"
+          },
+          "locale": {
+            "type": "string"
+          },
+          "accent_color": {
+            "type": "string",
+            "description": "Lowercase `#rrggbb`, or empty for the product accent."
+          },
+          "published": {
+            "type": "boolean"
+          },
+          "allow_indexing": {
+            "type": "boolean"
+          },
+          "has_password": {
+            "type": "boolean",
+            "description": "Derived. The hash itself never leaves the server."
+          },
+          "view_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "monitor_ids": {
+            "type": "array",
+            "description": "Flat, in display order. Kept for backward compatibility alongside `groups`/`monitors`.",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatusPageGroup"
+            }
+          },
+          "monitors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatusPageMonitorEntry"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "StatusPageGroup": {
+        "type": "object",
+        "required": [
+          "id",
+          "status_page_id",
+          "name",
+          "sort_order"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status_page_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sort_order": {
+            "type": "integer"
+          }
+        }
+      },
+      "StatusPageInput": {
+        "type": "object",
+        "required": [
+          "slug",
+          "title"
+        ],
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "footer_text": {
+            "type": "string"
+          },
+          "theme": {
+            "type": "string"
+          },
+          "logo_path": {
+            "type": "string",
+            "description": "Accepted and ignored; the logo is owned by the upload endpoints."
+          },
+          "accent_color": {
+            "type": "string"
+          },
+          "custom_domain": {
+            "type": "string"
+          },
+          "locale": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "description": "Plaintext page access password; hashed on save. Omit to leave unchanged."
+          },
+          "clear_password": {
+            "type": "boolean",
+            "description": "Drop password protection."
+          },
+          "published": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Omitted means published."
+          },
+          "allow_indexing": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "monitor_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "sort_order": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "monitors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "monitor_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "group_name": {
+                  "type": "string",
+                  "description": "Groups are matched or created by name on save."
+                },
+                "sort_order": {
+                  "type": "integer"
+                },
+                "show_uptime": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "StatusPageMonitorEntry": {
+        "type": "object",
+        "required": [
+          "monitor_id",
+          "sort_order",
+          "show_uptime"
+        ],
+        "properties": {
+          "monitor_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "group_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "group_name": {
+            "type": "string"
+          },
+          "sort_order": {
+            "type": "integer"
+          },
+          "show_uptime": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Tag": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "color",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "color": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TagInput": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "color": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateUserRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "viewer",
+              "user",
+              "admin"
+            ]
+          },
+          "is_active": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Omitted leaves the flag unchanged."
+          }
+        }
+      },
+      "User": {
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "display_name",
+          "role",
+          "totp_enabled",
+          "is_active",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "viewer",
+              "user",
+              "admin"
+            ]
+          },
+          "totp_enabled": {
+            "type": "boolean"
+          },
+          "avatar_path": {
+            "type": "string"
+          },
+          "locale": {
+            "type": "string"
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "VersionInfo": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "build_date": {
+            "type": "string"
+          },
+          "go_version": {
+            "type": "string"
+          }
+        }
+      },
+      "StepUpConfirmation": {
+        "type": "object",
+        "required": [
+          "password"
+        ],
+        "description": "Re-authentication. Required by the operations that change how an account can be signed into — minting an API key, enrolling an authenticator, linking a single-sign-on account, reissuing backup codes — because a session cookie alone would let a borrowed session turn itself into access that outlives the session and survives a password change. An account provisioned through single sign-on has no local password and no second factor to re-prove; for it the check is skipped and audited.",
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "The caller's current password."
+          },
+          "totp_code": {
+            "type": "string",
+            "description": "A current authenticator code, or one of the caller's backup codes. Required when the account has two-factor authentication enabled; a backup code is consumed when it is the one that matched."
+          }
+        }
+      },
+      "PublicUptimeBar": {
+        "type": "object",
+        "description": "One uptime bucket. `uptime` is a 0..1 fraction, or -1 when the bucket holds no conclusive heartbeat.",
+        "required": [
+          "start",
+          "date",
+          "status",
+          "uptime"
+        ],
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Bucket boundary, UTC. The unambiguous key at any granularity."
+          },
+          "date": {
+            "type": "string",
+            "description": "The bucket's UTC day, kept for the legacy heatmap."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "up",
+              "degraded",
+              "down",
+              "none"
+            ]
+          },
+          "uptime": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "PublicHistory": {
+        "type": "object",
+        "description": "Availability archive: one uptime bucket per calendar month per monitor, oldest first. `overall` and each monitor's `months` are parallel to `months`.",
+        "required": [
+          "slug",
+          "title",
+          "theme",
+          "allow_indexing",
+          "generated_at",
+          "months",
+          "overall",
+          "monitors"
+        ],
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "theme": {
+            "type": "string"
+          },
+          "logo_path": {
+            "type": "string"
+          },
+          "accent_color": {
+            "type": "string"
+          },
+          "locale": {
+            "type": "string"
+          },
+          "allow_indexing": {
+            "type": "boolean"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "months": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "overall": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "description": "Page-wide availability per month: the mean over the monitors with data that month, or -1 when none have any."
+          },
+          "monitors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "name",
+                "months",
+                "uptime"
+              ],
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "months": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PublicUptimeBar"
+                  }
+                },
+                "uptime": {
+                  "type": "number",
+                  "format": "double"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

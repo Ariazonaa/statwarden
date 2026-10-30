@@ -1,0 +1,109 @@
+# Statwarden — production compose stack: app + PostgreSQL 16.
+# Persistent data is bind-mounted under ./data: ./data/postgres, ./data/uploads
+# and ./data/backups.
+# Copy .env.example to .env next to this file and set real secrets. The app runs
+# as non-root uid 10001, so make the uploads dir writable once, then start:
+#   mkdir -p ./data/uploads ./data/backups && sudo chown -R 10001:10001 ./data/uploads ./data/backups
+#   docker compose up -d
+# (Postgres chowns ./data/postgres itself — no manual step needed there.)
+services:
+  app:
+    # The published image, not a local build.
+    #
+    # CI builds, scans and pushes ghcr.io/ariazonaa/statwarden on every push to
+    # main, tagged with the short commit SHA and `latest`, and pushes only after
+    # a clean Trivy scan. The image is public; no `docker login` is needed.
+    #
+    # For production, pin STATWARDEN_IMAGE to a SHA tag instead of `latest`:
+    # then what is running is legible, and a rollback is a tag change.
+    #
+    # To build it yourself instead:
+    #   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+    image: ${STATWARDEN_IMAGE:-ghcr.io/ariazonaa/statwarden:latest}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${PORT:-3001}:3001"
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-statwarden}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:-statwarden}?sslmode=disable
+      # Both secrets are consumed as-is -- ENCRYPTION_KEY is hashed once into
+      # the AES-256 key for stored credentials, SESSION_SECRET keys an HMAC --
+      # with no KDF in front, so the app rejects anything under 32 characters,
+      # anything repetitive and anything that looks like a placeholder. Generate
+      # each separately with `openssl rand -base64 48`.
+      # ENCRYPTION_KEY cannot be rotated freely: whatever was encrypted under
+      # the old value is unreadable under a new one, so back it up alongside
+      # ./data/postgres.
+      # Quoted, and they have to stay quoted: the `: ` inside the message is a
+      # mapping indicator to YAML, so unquoted these abort `docker compose` with
+      # "mapping values are not allowed in this context" before any container is
+      # built. Nothing else in this file needs quoting -- line 28's colons are
+      # not followed by a space, which is what actually triggers it.
+      SESSION_SECRET: "${SESSION_SECRET:?SESSION_SECRET is required (generate with: openssl rand -base64 48)}"
+      ENCRYPTION_KEY: "${ENCRYPTION_KEY:?ENCRYPTION_KEY is required (generate with: openssl rand -base64 48)}"
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:3001}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      UPLOADS_DIR: /data/uploads
+      # Scheduled pg_dump backups into ./data/backups. Off by default; see
+      # .env.example for what each knob does and docs/deployment.md for the
+      # restore. pg_dump ships in the image.
+      BACKUP_ENABLED: ${BACKUP_ENABLED:-false}
+      BACKUP_DIR: /data/backups
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-24}
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+      BACKUP_MAX_AGE_DAYS: ${BACKUP_MAX_AGE_DAYS:-30}
+      # Empty by default: X-Forwarded-For is ignored and the peer address wins.
+      # Set to your proxy's CIDRs only when Statwarden is reachable solely through
+      # it (see docs/reverse-proxy.md).
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      DEFAULT_LOCALE: ${DEFAULT_LOCALE:-en}
+      DEFAULT_CHECK_INTERVAL: ${DEFAULT_CHECK_INTERVAL:-60}
+      HEARTBEAT_RETENTION_DAYS: ${HEARTBEAT_RETENTION_DAYS:-180}
+      DELIVERY_RETENTION_DAYS: ${DELIVERY_RETENTION_DAYS:-365}
+      # 0 keeps deleted monitors in the recycle bin forever.
+      TRASH_RETENTION_DAYS: ${TRASH_RETENTION_DAYS:-30}
+      WORKER_POOL_SIZE: ${WORKER_POOL_SIZE:-0}
+      # Flapping damping and outage backoff; 0 switches either off.
+      FLAP_THRESHOLD: ${FLAP_THRESHOLD:-5}
+      FLAP_WINDOW_MINUTES: ${FLAP_WINDOW_MINUTES:-30}
+      DOWN_BACKOFF_AFTER_MINUTES: ${DOWN_BACKOFF_AFTER_MINUTES:-60}
+      DOWN_BACKOFF_INTERVAL_MINUTES: ${DOWN_BACKOFF_INTERVAL_MINUTES:-5}
+      # Only the default: an admin can override the session lifetime at runtime
+      # under Settings, and that stored value wins over this one.
+      SESSION_TTL_DAYS: ${SESSION_TTL_DAYS:-30}
+      # Single sign-on. Off unless OIDC_ENABLED=true; see .env.example for why
+      # OIDC_AUTO_PROVISION defaults to false.
+      OIDC_ENABLED: ${OIDC_ENABLED:-false}
+      OIDC_PROVIDER_ID: ${OIDC_PROVIDER_ID:-sso}
+      OIDC_DISPLAY_NAME: ${OIDC_DISPLAY_NAME:-Single sign-on}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_SCOPES: ${OIDC_SCOPES:-profile,email}
+      OIDC_AUTO_PROVISION: ${OIDC_AUTO_PROVISION:-false}
+      OIDC_DEFAULT_ROLE: ${OIDC_DEFAULT_ROLE:-viewer}
+      OIDC_ALLOWED_EMAIL_DOMAINS: ${OIDC_ALLOWED_EMAIL_DOMAINS:-}
+      DEV_MODE: "false"
+    volumes:
+      - ./data/uploads:/data/uploads
+      - ./data/backups:/data/backups
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-statwarden}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-statwarden}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data

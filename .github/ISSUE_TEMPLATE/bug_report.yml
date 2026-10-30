@@ -1,0 +1,38 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problems do **not** belong here — see SECURITY.md and use "Report a vulnerability".
+        Remove secrets, tokens and private hostnames from anything you paste.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: From `/api/v1/version`, or the image tag you run.
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How do you run it?
+      options: [Docker Compose, Docker (other), Bare metal / systemd, Release binary, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      render: text

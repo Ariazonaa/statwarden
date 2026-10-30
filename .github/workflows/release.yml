@@ -1,0 +1,73 @@
+name: Release
+
+# A strict SemVer tag (vX.Y.Z) publishes static linux/amd64 and linux/arm64
+# binaries with a SHA256SUMS file as a GitHub release. The image for the same
+# tag is published by image.yml.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse anything but strict SemVer
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          [[ "$TAG" =~ $semver ]] || { echo "::error::'$TAG' is not a vMAJOR.MINOR.PATCH tag"; exit 1; }
+
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend (embedded, real backend)
+        working-directory: web
+        env:
+          VITE_USE_MOCK: "false"
+        run: |
+          npm ci
+          npm run build
+          npm run verify:no-mock
+
+      - name: Build binaries and checksums
+        env:
+          CGO_ENABLED: "0"
+          MODULE: github.com/Ariazonaa/statwarden
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -eu
+          COMMIT=$(git rev-parse --short=12 HEAD)
+          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          mkdir -p dist
+          for GOARCH in amd64 arm64; do
+            export GOOS=linux GOARCH
+            for cmd in statwarden statwarden-cli; do
+              OUT="dist/${cmd}-${VERSION}-linux-${GOARCH}"
+              go build -trimpath \
+                -ldflags "-s -w -X ${MODULE}/internal/version.Version=${VERSION} -X ${MODULE}/internal/version.Commit=${COMMIT} -X ${MODULE}/internal/version.Date=${DATE}" \
+                -o "${OUT}" "./cmd/${cmd}"
+              tar -czf "${OUT}.tar.gz" -C dist "$(basename "${OUT}")"
+              rm -f "${OUT}"
+            done
+          done
+          ( cd dist && sha256sum *.tar.gz | tee SHA256SUMS )
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          generate_release_notes: true

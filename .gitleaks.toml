@@ -1,0 +1,67 @@
+# Gitleaks allowlist.
+#
+# CI runs `gitleaks detect` over the FULL history on every push and pull
+# request, and the step fails the job on any finding. That is the right
+# threshold, and it is why this file exists rather than a lowered one: the
+# findings below are synthetic test fixtures, and the only honest way to clear
+# them is to name each one and say why it is not a secret.
+#
+# What this file must NOT become: a blanket exclusion of `_test.go`. A test file
+# is exactly where a real credential gets pasted "just to reproduce it", so the
+# allowlist stays pinned to five named files and the four literal values they
+# contain. Anything else in the tree is still a finding.
+#
+# Adding an entry is a security decision. Rotate first, then delete the value
+# from the history; allowlist only what was never a credential to begin with.
+
+title = "statwarden"
+
+[extend]
+# Keep the upstream rule set; this file only subtracts from it.
+useDefault = true
+
+[allowlist]
+description = "Synthetic fixtures in five test files — verified not credentials"
+
+# Matched against the file path. Named individually, not by a `_test\.go$`
+# pattern, so a fourth file cannot inherit the exemption by accident.
+paths = [
+  # config.Load requires SESSION_SECRET and ENCRYPTION_KEY to be present and to
+  # contain none of the placeholderSecrets fragments ("example", "changeme", …).
+  # The test therefore CANNOT use an obviously fake string: it needs two values
+  # that look exactly like the real thing, which is precisely what trips
+  # generic-api-key. Both are random strings typed for this test and never
+  # deployed anywhere.
+  '''^internal/config/config_test\.go$''',
+
+  # TestKeyDerivationIsFrozen pins the SHA-256 derivation from ENCRYPTION_KEY to
+  # the AES-256 key. It rebuilds the cipher independently of secrets.New, so the
+  # key literal is the input to a known-answer test — changing it would defeat
+  # the test's purpose (catching a derivation change that would make every
+  # stored credential undecryptable after a deploy).
+  '''^internal/notify/secrets/secrets_test\.go$''',
+
+  # PagerDuty routing keys are 32 hex characters. The fixture is the identity
+  # sequence 0123456789ABCDEF twice over, behind an `R` — shaped like a routing
+  # key so the config validator accepts it, obviously not one to a human.
+  '''^internal/notify/providers/pagerduty/pagerduty_test\.go$''',
+
+  # Webhook signing (commit f7d896db). The HMAC tests need a secret that passes
+  # CheckWebhookSecret (16+ characters, no whitespace) and the write-only setting
+  # tests need one to assert it is never echoed back. `whsec-` plus the digits
+  # and a-f once each: shaped like a signing secret, obviously a counting
+  # sequence to a human, never configured anywhere.
+  '''^internal/webhookq/signature_test\.go$''',
+  '''^internal/api/settings_secret_test\.go$''',
+]
+
+# Matched against the detected secret. Redundant with `paths` above, and
+# deliberately so: if one of those files is ever renamed or split, the exemption
+# should follow the four known-fake VALUES rather than silently lapse into a
+# red pipeline that someone then fixes by widening the paths.
+regexes = [
+  '''Kx7Qv2mZs9Wd4Rt6Nv1Xc8Lp3Jg5Hf0Aq''',
+  '''Zt4Nw8Rk1Vs6Mc3Xy9Bp2Ld7Qh5Gf0Jut''',
+  '''R0123456789ABCDEF0123456789ABCDEF''',
+  '''whsec-0123456789abcdef''',
+]

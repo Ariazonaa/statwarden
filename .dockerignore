@@ -1,0 +1,54 @@
+# Keep secrets and local cruft out of the Docker build context (and the build
+# cache). The build needs only the Go and web sources: node_modules is
+# recreated by `npm ci` and web/dist is replaced by the web stage, so both are
+# excluded here.
+
+# --- VCS & CI ---
+.git
+.gitattributes
+.gitignore
+.gitea
+.github
+.golangci.yml
+
+# --- Environment & secrets ---
+.env
+.env.*
+.secrets/
+*.pem
+keys/
+
+# --- Node / SvelteKit ---
+node_modules/
+web/node_modules/
+web/.svelte-kit/
+web/dist/
+
+# --- Go build artefacts ---
+/statwarden
+/statwarden.exe
+*.test
+coverage.out
+coverage.html
+
+# --- Runtime data ---
+uploads/
+/data/
+
+# --- IDE / OS / Tooling / agents ---
+.idea/
+.vscode/
+.claude/
+.codex/
+.agents/
+.playwright-mcp/
+*.swp
+.DS_Store
+Thumbs.db
+
+# --- Docs & meta not needed at build time ---
+docs/
+deploy/
+docker-compose.yml
+docker-compose.dev.yml
+*.md

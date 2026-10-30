@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  backend:
+    name: Backend (Go)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: go vet
+        run: go vet ./...
+      - name: go test -race
+        run: go test -race ./...
+      - name: go build
+        run: go build ./...
+      # Fails on any REACHABLE advisory, including the standard library: raising
+      # the go directive in go.mod is the fix for those.
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  integration:
+    name: Integration (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: statwarden
+          POSTGRES_PASSWORD: statwarden
+          POSTGRES_DB: statwarden
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U statwarden -d statwarden"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # The backup tests shell out to pg_dump / pg_restore; the runner image
+      # ships a PostgreSQL client, but not necessarily one matching the server.
+      - name: Install PostgreSQL 16 client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-client-16
+          echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
+      - name: go test -tags=integration
+        run: make test-integration
+        env:
+          INTEGRATION_DATABASE_URL: postgres://statwarden:statwarden@localhost:5432/statwarden?sslmode=disable
+
+  lint:
+    name: Lint (golangci-lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # The version is pinned in the Makefile so `make lint` and CI cannot drift;
+      # the release binary is used here because `go run` recompiles the linter.
+      - name: golangci-lint
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^GOLANGCI_LINT_VERSION := v//p' Makefile)
+          test -n "$version" || { echo "::error::GOLANGCI_LINT_VERSION not found in Makefile"; exit 1; }
+          url="https://github.com/golangci/golangci-lint/releases/download/v${version}/golangci-lint-${version}-linux-amd64.tar.gz"
+          tmp=$(mktemp -d)
+          curl -fsSL "$url" | tar -xz -C "$tmp" --strip-components=1
+          "$tmp/golangci-lint" run
+
+  frontend:
+    name: Frontend (SvelteKit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: Audit (production dependencies)
+        run: npm audit --omit=dev --audit-level=high
+      - name: Type check
+        run: npm run check
+      - name: Format check
+        run: npm run lint
+      - name: Unit tests
+        run: npm test
+      - name: Build (real backend)
+        run: npm run build
+        env:
+          VITE_USE_MOCK: "false"
+      - name: Verify the bundle carries no mock backend
+        run: npm run verify:no-mock
+
+  security:
+    name: Security (gitleaks, Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks (full history)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Trivy (dependencies and configuration)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scanners: vuln,misconfig
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"

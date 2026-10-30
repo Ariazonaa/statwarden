@@ -1,0 +1,93 @@
+# Statwarden — systemd unit for bare-metal deployment (no Docker).
+#
+# Install:
+#   sudo install -m0755 statwarden /usr/local/bin/statwarden
+#   sudo useradd --system --home /var/lib/statwarden --shell /usr/sbin/nologin statwarden || true
+#   sudo mkdir -p /var/lib/statwarden/uploads /etc/statwarden
+#   sudo chown -R statwarden:statwarden /var/lib/statwarden
+#   sudo install -m0640 -o root -g statwarden .env.example /etc/statwarden/statwarden.env
+#   openssl rand -base64 48         # once for SESSION_SECRET
+#   openssl rand -base64 48         # again for ENCRYPTION_KEY, never the same
+#   sudoedit /etc/statwarden/statwarden.env # paste both, plus DATABASE_URL
+#   sudo install -m0644 deploy/statwarden.service /etc/systemd/system/statwarden.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now statwarden
+#
+# GENERATE THE TWO SECRETS BEFORE THE FIRST START. The values .env.example ships
+# are recognised as placeholders and REJECTED at startup, so the unit installed
+# with the file copied verbatim will not boot -- deliberately, because an
+# instance that came up on a published key would seal real credentials under it.
+# Neither secret is stretched (ENCRYPTION_KEY is a single SHA-256 into the
+# AES-256 key; SESSION_SECRET keys an HMAC), so their entropy is the whole of
+# the protection. A value under 32 characters, or built from fewer than 5
+# distinct ones, only warns on every start -- fix it, but it will run.
+#
+# ENCRYPTION_KEY IS NOT FREELY ROTATABLE: monitor configs, notification-channel
+# configs and TOTP secrets sealed under the old key cannot be read under a new
+# one. Changing it means re-entering those credentials by hand and having every
+# 2FA user re-enrol (backup codes still work -- they are hashed, not encrypted).
+# Back /etc/statwarden/statwarden.env up with the database; a dump without its key is
+# not a restorable backup. Rotating SESSION_SECRET alone is cheap: it only
+# invalidates OIDC logins in flight, and logs nobody out.
+#
+# Logs: journalctl -u statwarden -f   (the app emits structured JSON on stdout).
+# Startup refusals and "configuration warning" lines both land there.
+#
+# ICMP ping monitors need raw sockets. Either keep AmbientCapabilities below
+# (grants only CAP_NET_RAW) or run the pinger in unprivileged UDP mode.
+
+[Unit]
+Description=Statwarden uptime monitoring
+Documentation=https://github.com/Ariazonaa/statwarden
+After=network-online.target
+Wants=network-online.target
+# If PostgreSQL runs on the same host, order after it (harmless if absent):
+After=postgresql.service
+
+[Service]
+Type=simple
+User=statwarden
+Group=statwarden
+
+# All configuration is via environment (12-factor). Keep secrets in this file,
+# readable only by root and the statwarden group (mode 0640).
+EnvironmentFile=/etc/statwarden/statwarden.env
+
+# Uploaded status-page logos. The default (./uploads) already resolves here via
+# WorkingDirectory below, but stating it explicitly keeps the unit correct if
+# that ever changes. Do not point this at /data: ProtectSystem=strict makes it
+# read-only.
+Environment=UPLOADS_DIR=/var/lib/statwarden/uploads
+
+# Apply pending migrations before serving, then start the server.
+ExecStartPre=/usr/local/bin/statwarden --migrate-only
+ExecStart=/usr/local/bin/statwarden
+
+Restart=on-failure
+RestartSec=5s
+# Give in-flight checks/WebSockets time to drain (matches the app's 15s
+# graceful-shutdown budget).
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+
+# --- Hardening ---------------------------------------------------------------
+# Persistent state (uploads) lives here; systemd creates it under /var/lib.
+StateDirectory=statwarden
+WorkingDirectory=/var/lib/statwarden
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/lib/statwarden
+# ICMP raw sockets for ping monitors. Remove both lines if you don't use them.
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,39 @@
+# --- Go ---
+/statwarden
+/statwarden.exe
+/statwarden-test.exe
+*.test
+coverage.out
+coverage.html
+
+# --- Node / SvelteKit ---
+node_modules/
+web/.svelte-kit/
+web/dist/*
+!web/dist/.gitkeep
+
+# --- Environment & secrets ---
+.env
+.env.*
+!.env.example
+.secrets/
+*.pem
+
+# --- Runtime data (docker bind mounts: postgres data + uploads) ---
+/data/
+
+# --- IDE / OS / Tooling ---
+.idea/
+.vscode/
+.claude/
+.playwright-mcp/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local Uptime-Kuma DBs used for import testing (never commit user data)
+kuma.db
+*.kuma.db
+kuma.db-shm
+kuma.db-wal
+db-config.json

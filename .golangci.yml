@@ -1,0 +1,69 @@
+# golangci-lint v2 configuration — deliberately modest, non-flaky set.
+version: "2"
+
+linters:
+  # standard = errcheck, govet, ineffassign, staticcheck, unused
+  default: standard
+  enable:
+    - misspell
+    - unconvert
+    - nolintlint
+    - copyloopvar
+    # gosec was already being written for before it was ever run: eighteen
+    # //nolint:gosec annotations with reasons existed across the tree while
+    # nothing enforced them. Two InsecureSkipVerify sites and the scheduler's
+    # jitter had simply been missed, and nobody could tell, because a nolint
+    # comment for a disabled linter looks exactly like a considered exemption.
+    - gosec
+  settings:
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    gosec:
+      # Zwei Regeln, die dieses Repo nicht erfuellen KANN, ausgeschlossen an
+      # einer Stelle statt zehnmal per //nolint im Code -- eine Ausnahme, die
+      # sich nie aendern kann, gehoert nicht neben jede Fundstelle.
+      #
+      # G101 bewertet den NAMEN einer Konstanten, nicht ihren Wert. Getroffen
+      # werden hier "__redacted__", der Text "invalid or expired reset token"
+      # und drei SQL-Spaltenlisten, die "password_hash" enthalten. Ein echtes
+      # Geheimnis im Quelltext faengt gitleaks im Security-Workflow, und zwar
+      # ueber die gesamte History statt nur ueber den aktuellen Stand.
+      #
+      # G124 verlangt `Secure: true` als Literal. Alle fuenf Cookie-Bauer setzen
+      # HttpOnly, SameSite=Lax und Secure -- Letzteres aus der Konfiguration
+      # (`s.secureCookies`, gesetzt wenn PUBLIC_BASE_URL https ist). Ein Literal
+      # daraus zu machen hiesse, dass sich auf einer DEV_MODE-Instanz ueber http
+      # niemand mehr anmelden kann.
+      excludes:
+        - G101
+        - G124
+  exclusions:
+    generated: lax
+    rules:
+      # Tests may ignore Close/Write errors for brevity.
+      - path: _test\.go
+        linters:
+          - errcheck
+      # gosec on test files reports the fixtures, not the product: struct
+      # fields named Password/Secret being marshalled (G117), a deliberately
+      # credential-shaped constant (G101), an unchecked Close (G104), a
+      # hand-built packet's int->byte conversion (G115). Eleven findings, none
+      # of which describe anything that ships. The exemption is scoped to the
+      # linter and the path, so a real one in internal/ still fails the build.
+      - path: _test\.go
+        linters:
+          - gosec
+
+issues:
+  # Standard sind 3 gleichartige und 50 Meldungen pro Linter. Beides schneidet
+  # still ab: ein Lauf meldet dann "3 Funde", wo 19 sind, und der Unterschied
+  # steht nirgends. Ein Gate, das seine eigene Ausgabe kuerzt, ohne es zu sagen,
+  # ist genau die Klasse Fehler, die dieses Repo sonst ueberall vermeidet.
+  max-same-issues: 0
+  max-issues-per-linter: 0
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
