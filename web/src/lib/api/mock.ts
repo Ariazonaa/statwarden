@@ -651,7 +651,7 @@ const statusPages: StatusPage[] = [
 		description: 'Live status of Example public services.',
 		footerText: 'Questions? support@example.com',
 		theme: 'auto',
-		locale: 'de',
+		locale: 'en',
 		accentColor: '#0ea5e9',
 		published: true,
 		allowIndexing: true,

@@ -65,9 +65,21 @@ jobs:
           done
           ( cd dist && sha256sum *.tar.gz | tee SHA256SUMS )
 
+      # The release text is the version's section of CHANGELOG.md, so the notes
+      # on GitHub and the file in the repository cannot say different things.
+      - name: Release notes from CHANGELOG.md
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          awk -v v="$v" 'index($0, "## [" v "]") == 1 {f=1; next} f && /^## \[/ {exit} f' CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::error::CHANGELOG.md has no section for ${v}"
+            exit 1
+          fi
+          cat notes.md
+
       - uses: softprops/action-gh-release@v2
         with:
+          body_path: notes.md
           files: |
             dist/*.tar.gz
             dist/SHA256SUMS
-          generate_release_notes: true

@@ -56,11 +56,12 @@
 			<span class="mark" aria-hidden="true">
 				<svg viewBox="0 0 64 64"
 					><path
-						d="M20 22v14a12 12 0 0 0 24 0V22"
+						d="M32 7 50 14v15c0 12-7.7 21.6-18 26-10.3-4.4-18-14-18-26V14L32 7Zm-12 25h7l4-8 6 16 4-8h3"
 						fill="none"
 						stroke="currentColor"
-						stroke-width="6"
+						stroke-width="4.5"
 						stroke-linecap="round"
+						stroke-linejoin="round"
 					/></svg
 				>
 			</span>

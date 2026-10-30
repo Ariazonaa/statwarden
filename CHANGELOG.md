@@ -5,8 +5,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versioning: 
 
 ## [Unreleased]
 
-First public version. Statwarden was developed privately before this
-repository was opened; this entry summarises what the first release contains.
+## [0.1.0] - 2026-10-30
+
+First public release. Statwarden was developed privately before this
+repository was opened; this entry summarises what it contains.
 
 ### Added
 
@@ -38,3 +40,6 @@ repository was opened; this entry summarises what the first release contains.
   amd64 and arm64, docker-compose stack, systemd unit, scheduled `pg_dump`
   backups, heartbeat retention, configuration export/import and an Uptime Kuma
   importer.
+
+[Unreleased]: https://github.com/Ariazonaa/statwarden/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Ariazonaa/statwarden/releases/tag/v0.1.0

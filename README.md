@@ -1,8 +1,33 @@
-# Statwarden
+<p align="center">
+  <img src="docs/assets/logo.svg" width="88" alt="Statwarden logo">
+</p>
 
-**Self-hosted uptime monitoring for teams.** One Go binary, PostgreSQL, a fast SvelteKit dashboard — with the things a shared monitoring setup needs and single-user tools leave out: users and roles, SSO, a real REST API, an audit trail and SLA reports.
+<h1 align="center">Statwarden</h1>
 
-> Status: actively developed and used in production by the author. No tagged release yet — see [CHANGELOG.md](./CHANGELOG.md). Planned work and bugs live in [GitHub issues](https://github.com/Ariazonaa/statwarden/issues).
+<p align="center">
+  <strong>Self-hosted uptime monitoring for teams.</strong><br>
+  One Go binary · PostgreSQL · a fast dashboard you already know how to use
+</p>
+
+<p align="center">
+  <a href="https://github.com/Ariazonaa/statwarden/actions/workflows/ci.yml"><img src="https://github.com/Ariazonaa/statwarden/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/Ariazonaa/statwarden/releases"><img src="https://img.shields.io/github/v/release/Ariazonaa/statwarden?include_prereleases&sort=semver" alt="Release"></a>
+  <a href="https://github.com/Ariazonaa/statwarden/pkgs/container/statwarden"><img src="https://img.shields.io/badge/image-ghcr.io-2496ED?logo=docker&logoColor=white" alt="Container image"></a>
+  <img src="https://img.shields.io/github/go-mod/go-version/Ariazonaa/statwarden" alt="Go version">
+  <a href="./LICENSE"><img src="https://img.shields.io/github/license/Ariazonaa/statwarden" alt="License: MIT"></a>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" alt="Statwarden dashboard: monitor list with per-check status bars, quick stats and the event log" width="100%">
+</p>
+
+Statwarden watches your websites, APIs, databases and servers and tells the right people when something
+breaks — with the things a shared monitoring setup needs and single-user tools leave out: users and
+roles, SSO, a real REST API, an audit trail and SLA reports.
+
+> **Status:** early but in daily production use by the author. Versions follow [SemVer](https://semver.org);
+> while the major version is `0`, minor releases may still change behaviour — see [CHANGELOG.md](./CHANGELOG.md).
+> Bugs and planned work live in [GitHub issues](https://github.com/Ariazonaa/statwarden/issues).
 
 ## Why
 
@@ -19,6 +44,19 @@
 **19 monitor types** — HTTP(S) with keyword / JSON path / header assertions, WebSocket, TCP, UDP, Ping, DNS, NTP, SNMP, RADIUS, TLS certificate, PostgreSQL, MySQL/MariaDB, MongoDB, Redis, Docker, gRPC, MQTT, Steam, Push — and **19 notification channels**, including Slack, Discord, Teams, Telegram, Matrix, Signal, ntfy, Gotify, Pushover, PagerDuty, Opsgenie, e-mail, web push and Apprise for everything else.
 
 Public **status pages** with incidents, post-mortems, custom domains, password protection and a multi-year availability archive.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/monitor.png" alt="Monitor detail with status bar, key figures and response-time chart"><br><sub><b>Monitor detail</b> — per-check bar, uptime over 24 h / 30 d / 1 y, certificate expiry, response time</sub></td>
+    <td width="50%"><img src="docs/screenshots/settings.png" alt="Settings with section menu"><br><sub><b>Settings</b> — sessions, scoped API keys, webhooks, import &amp; export, SLA reports</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/status-page.png" alt="Public status page with maintenance, incidents and component uptime"><br><sub><b>Public status page</b> — maintenance, incidents with updates, post-mortems, 90-day bars</sub></td>
+    <td width="50%" align="center"><img src="docs/screenshots/mobile.png" width="260" alt="Monitor list on a phone"><br><sub><b>On a phone</b> — the same list with a bottom navigation bar</sub></td>
+  </tr>
+</table>
 
 ## Quick start
 
