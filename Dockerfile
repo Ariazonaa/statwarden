@@ -30,7 +30,7 @@ RUN VITE_USE_MOCK=false npm run build
 #
 # CGO_ENABLED=0 below, so the alpine flavour of this image is irrelevant; only
 # the Go version is.
-FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.2-alpine AS build
 WORKDIR /src
 RUN apk add --no-cache git
 COPY go.mod go.sum ./
