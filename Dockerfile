@@ -61,7 +61,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     -o /out/statwarden ./cmd/statwarden
 
 # --- Stage 3: runtime --------------------------------------------------------
-FROM alpine:3.22
+FROM alpine:3.24
 # ca-certificates: outbound TLS checks/notifications. tzdata: quiet-hours and
 # scheduling in local time. wget (busybox, already present) powers the
 # healthcheck — no extra package needed.
