@@ -61,12 +61,12 @@ func TestShippedYAMLParses(t *testing.T) {
 	// Globbed rather than listed so a new workflow is covered the day it lands.
 	// An empty glob is a hard failure: silently covering nothing is exactly the
 	// hole this test exists to close.
-	workflows, err := filepath.Glob(filepath.Join(root, ".gitea", "workflows", "*.yml"))
+	workflows, err := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.yml"))
 	if err != nil {
 		t.Fatalf("glob workflows: %v", err)
 	}
 	if len(workflows) == 0 {
-		t.Fatal("no files matched .gitea/workflows/*.yml — the layout moved and this test would cover nothing")
+		t.Fatal("no files matched .github/workflows/*.yml — the layout moved and this test would cover nothing")
 	}
 	files = append(files, workflows...)
 
