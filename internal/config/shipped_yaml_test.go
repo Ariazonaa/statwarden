@@ -1,8 +1,11 @@
 package config
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -37,38 +40,16 @@ func repoRoot(t *testing.T) string {
 //
 // This lives in internal/config because the package already owns the other half
 // of that contract: a new knob touches config.go, .env.example and
-// docker-compose.yml together. The workflows are in scope for the same reason,
-// and release.yml is the one that needs it most — it only ever runs on a tag,
-// so a syntax error there stays invisible until someone is cutting a release.
+// docker-compose.yml together. Everything under .github is in scope for the
+// same reason: the workflows, dependabot.yml and the issue forms are only ever
+// read by GitHub, and release.yml least of all — it runs on a tag, so a syntax
+// error there stays invisible until someone is cutting a release.
 //
 // Parsing is the whole assertion. It is not a schema check: docker compose and
-// Gitea each validate their own semantics, and duplicating that here would rot.
+// GitHub each validate their own semantics, and duplicating that here would rot.
 func TestShippedYAMLParses(t *testing.T) {
 	root := repoRoot(t)
-
-	// Globbed, not listed. The two compose files used to be named here, and
-	// docker-compose.build.yml showed what that costs: a third one lands and the
-	// gate covers everything except the file nobody remembered to add — which is
-	// the same failure this test was written to prevent, one level up.
-	files, err := filepath.Glob(filepath.Join(root, "docker-compose*.yml"))
-	if err != nil {
-		t.Fatalf("glob compose files: %v", err)
-	}
-	if len(files) < 2 {
-		t.Fatalf("docker-compose*.yml matched %d files — the layout moved and this test would cover almost nothing", len(files))
-	}
-
-	// Globbed rather than listed so a new workflow is covered the day it lands.
-	// An empty glob is a hard failure: silently covering nothing is exactly the
-	// hole this test exists to close.
-	workflows, err := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.yml"))
-	if err != nil {
-		t.Fatalf("glob workflows: %v", err)
-	}
-	if len(workflows) == 0 {
-		t.Fatal("no files matched .github/workflows/*.yml — the layout moved and this test would cover nothing")
-	}
-	files = append(files, workflows...)
+	files := shippedYAML(t, root)
 
 	for _, path := range files {
 		rel, err := filepath.Rel(root, path)
@@ -85,5 +66,94 @@ func TestShippedYAMLParses(t *testing.T) {
 				t.Fatalf("does not parse as YAML: %v", err)
 			}
 		})
+	}
+}
+
+// shippedYAML returns every YAML file under root that TestShippedYAMLParses covers.
+func shippedYAML(t *testing.T, root string) []string {
+	t.Helper()
+
+	// Globbed, not listed. The two compose files used to be named here, and
+	// docker-compose.build.yml showed what that costs: a third one lands and the
+	// gate covers everything except the file nobody remembered to add — which is
+	// the same failure this test was written to prevent, one level up.
+	files, err := filepath.Glob(filepath.Join(root, "docker-compose*.yml"))
+	if err != nil {
+		t.Fatalf("glob compose files: %v", err)
+	}
+	if len(files) < 2 {
+		t.Fatalf("docker-compose*.yml matched %d files — the layout moved and this test would cover almost nothing", len(files))
+	}
+
+	// Walked rather than listed so a new workflow, issue form or bot config is
+	// covered the day it lands, whichever of the two YAML extensions it uses.
+	// No workflow found is a hard failure: silently covering nothing is exactly
+	// the hole this test exists to close.
+	workflows := 0
+	err = filepath.WalkDir(filepath.Join(root, ".github"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		switch filepath.Ext(path) {
+		case ".yml", ".yaml":
+			files = append(files, path)
+			if filepath.Base(filepath.Dir(path)) == "workflows" {
+				workflows++
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk .github: %v", err)
+	}
+	if workflows == 0 {
+		t.Fatal("no YAML file found under .github/workflows — the layout moved and this test would cover almost nothing")
+	}
+	return files
+}
+
+// The file set is asserted on a synthetic tree, so the walk is proven to reach
+// every kind of file under .github without depending on what the real
+// repository happens to contain today.
+func TestShippedYAMLCoversGitHubDir(t *testing.T) {
+	root := t.TempDir()
+	want := []string{
+		"docker-compose.yml",
+		"docker-compose.dev.yml",
+		".github/dependabot.yml",
+		".github/workflows/ci.yml",
+		".github/workflows/release.yaml",
+		".github/ISSUE_TEMPLATE/bug_report.yml",
+		".github/ISSUE_TEMPLATE/config.yaml",
+	}
+	skip := []string{
+		".github/pull_request_template.md",
+		"web/node_modules/pkg/action.yml",
+	}
+	for _, rel := range append(append([]string{}, want...), skip...) {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("a: 1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var got []string
+	for _, path := range shippedYAML(t, root) {
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, filepath.ToSlash(rel))
+	}
+	sort.Strings(got)
+	sort.Strings(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("covered files:\n got  %q\n want %q", got, want)
 	}
 }
