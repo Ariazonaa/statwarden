@@ -912,6 +912,13 @@ func (e *Engine) persist(m domain.Monitor, res domain.CheckResult, next domain.M
 	defer cancel()
 
 	latency := res.Latency
+	// Every consumer of a heartbeat — the latency_ms column, the live feed —
+	// keeps whole milliseconds and truncates, so a 300µs loopback check landed
+	// as 0, which reads as "nothing measured". Rounding only the sub-millisecond
+	// case up, here, keeps the stores and the live feed in agreement.
+	if latency > 0 && latency < time.Millisecond {
+		latency = time.Millisecond
+	}
 	hb := domain.Heartbeat{
 		MonitorID: m.ID,
 		CheckedAt: now,
