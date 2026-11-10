@@ -124,6 +124,33 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+
+      # Author and committer addresses become part of the public history for
+      # good once a pull request is merged, so only GitHub's no-reply
+      # addresses are accepted: <id>+<login>@users.noreply.github.com, which
+      # bots such as dependabot[bot] and github-actions[bot] use too, and
+      # noreply@github.com, the committer of web edits, merges and Dependabot's
+      # commits. Set a no-reply address with `git config user.email`; the
+      # offending address is deliberately not echoed into the public log.
+      - name: Commit addresses are GitHub no-reply addresses
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          allowed='^[^@[:space:]]+@users[.]noreply[.]github[.]com$|^noreply@github[.]com$'
+          commits=$(git log --format='%H author %ae%n%H committer %ce' "$BASE_SHA..$HEAD_SHA")
+          fail=0
+          while read -r sha role email; do
+            [ -n "$sha" ] || continue
+            if ! [[ "${email:-}" =~ $allowed ]]; then
+              echo "::error::commit ${sha:0:12}: the ${role} address is not a GitHub no-reply address"
+              fail=1
+            fi
+          done <<< "$commits"
+          exit "$fail"
+
       - name: gitleaks (full history)
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
