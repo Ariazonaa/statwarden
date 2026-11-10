@@ -67,8 +67,11 @@ func TestNewAPIKeyPrefix(t *testing.T) {
 	if len(secret) <= len(APIKeyPrefix) || secret[:len(APIKeyPrefix)] != APIKeyPrefix {
 		t.Fatalf("secret %q missing prefix", secret)
 	}
-	if display != secret[:12] {
-		t.Fatalf("display %q != secret prefix", display)
+	// The display prefix has to carry enough of the random part to tell keys
+	// apart in a list; the fixed "statwarden_" alone identifies nothing.
+	want := len(APIKeyPrefix) + apiKeyDisplayRandom
+	if len(display) != want || display != secret[:want] {
+		t.Fatalf("display %q, want the first %d characters of %q", display, want, secret)
 	}
 }
 

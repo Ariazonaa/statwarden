@@ -36,15 +36,22 @@ func HashToken(token string) string {
 // display in the key list.
 const APIKeyPrefix = "statwarden_"
 
+// apiKeyDisplayRandom is how many characters of the random part the display
+// prefix keeps. The fixed APIKeyPrefix alone is the same for every key, so a
+// list of "statwarden_" entries cannot tell one key from another. Six base64url
+// characters (36 bits) are plenty to recognise a key and nowhere near enough to
+// help guess the remaining ~250 bits.
+const apiKeyDisplayRandom = 6
+
 // NewAPIKey returns a prefixed API-key secret and its short display prefix
-// (the first 12 characters, safe to store and show).
+// (APIKeyPrefix plus the first few random characters, safe to store and show).
 func NewAPIKey() (secret, display string, err error) {
 	tok, err := NewToken()
 	if err != nil {
 		return "", "", err
 	}
 	secret = APIKeyPrefix + tok
-	display = secret[:12]
+	display = secret[:len(APIKeyPrefix)+apiKeyDisplayRandom]
 	return secret, display, nil
 }
 
