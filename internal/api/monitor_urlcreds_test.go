@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/Ariazonaa/statwarden/internal/importexport"
 )
 
 // TestMonitorURLPasswordIsMaskedOnRead covers the read half of the url-credential
@@ -135,5 +137,90 @@ func TestMaskURLPassword(t *testing.T) {
 				t.Fatalf("maskURLPassword(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// An MQTT broker URL can carry the broker login inline (the client library
+// uses userinfo when present), and "broker" was handed out verbatim on every
+// read. It gets the same password-only mask as "url".
+//
+// The mask must also survive the edit round trip: the form sends back what it
+// read, and storing "tcp://ops:__redacted__@…" would replace the real password
+// with the placeholder while the save looked successful.
+func TestMQTTBrokerPasswordIsMaskedAndKept(t *testing.T) {
+	h := newHarness(t)
+	admin := h.setupAdmin()
+
+	const stored = `{"broker":"tcp://ops:hunter2@mq.example.test:1883","topic":"health"}`
+	rec := h.requestWith(http.MethodPost, "/api/v1/monitors", monitorRequest{
+		Name: "mq", Type: "fake", Interval: 60, Config: json.RawMessage(stored),
+	}, admin)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var created monitorView
+	mustJSON(t, rec, &created)
+
+	get := h.requestWith(http.MethodGet, "/api/v1/monitors/"+itoa64(created.ID), nil, admin)
+	var view monitorView
+	mustJSON(t, get, &view)
+	body := string(view.Config)
+	if strings.Contains(body, "hunter2") {
+		t.Fatalf("the broker password is handed out on read: %s", body)
+	}
+	if !strings.Contains(body, "ops:"+monitorSecretPlaceholder+"@mq.example.test") {
+		t.Fatalf("the broker lost its identity or was not marked redacted: %s", body)
+	}
+
+	rec = h.requestWith(http.MethodPut, "/api/v1/monitors/"+itoa64(created.ID), monitorRequest{
+		Name: "mq renamed", Type: "fake", Interval: 60, Config: view.Config,
+	}, admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save of the read config = %d, body %s", rec.Code, rec.Body.String())
+	}
+	m, err := h.store.GetMonitor(t.Context(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(m.Config), "ops:hunter2@mq.example.test") {
+		t.Fatalf("the round trip replaced the stored broker password: %s", m.Config)
+	}
+}
+
+// A masked broker is a placeholder, not a password: create refuses it like a
+// placeholder secret, and an import drops it with a warning instead of storing
+// the mask as the login.
+func TestMaskedBrokerPasswordIsNeverStored(t *testing.T) {
+	h := newImportHarness(t, nil)
+	admin := h.setupAdmin()
+	masked := `{"broker":"tcp://ops:` + monitorSecretPlaceholder + `@mq.example.test:1883"}`
+
+	rec := h.requestWith(http.MethodPost, "/api/v1/monitors", monitorRequest{
+		Name: "mq", Type: "fake", Interval: 60, Config: json.RawMessage(masked),
+	}, admin)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("create with a masked broker = %d, want 400; body %s", rec.Code, rec.Body.String())
+	}
+
+	rec = h.requestWith(http.MethodPost, "/api/v1/import", importexport.Bundle{
+		Version: importexport.BundleVersion,
+		Monitors: []importexport.MonitorSpec{{
+			Name: "mq", Type: "fake", IntervalSeconds: 60, Active: true, Config: json.RawMessage(masked),
+		}},
+	}, admin)
+	var res importResult
+	mustJSON(t, rec, &res)
+	if res.Monitors != 1 {
+		t.Fatalf("import = %+v, want the monitor created", res)
+	}
+	if !strings.Contains(strings.Join(res.Warnings, "\n"), "broker") {
+		t.Fatalf("the dropped broker password is not reported: %v", res.Warnings)
+	}
+	mons, _, _ := h.store.ListMonitors(t.Context(), MonitorFilter{}, Page{Limit: 10})
+	if len(mons) != 1 || strings.Contains(string(mons[0].Config), monitorSecretPlaceholder) {
+		t.Fatalf("the mask was stored as the broker password: %+v", mons)
+	}
+	if !strings.Contains(string(mons[0].Config), "ops@mq.example.test") {
+		t.Fatalf("the broker lost more than its password: %s", mons[0].Config)
 	}
 }

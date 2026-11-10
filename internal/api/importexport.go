@@ -294,6 +294,14 @@ func (s *server) applyBundle(r *http.Request, monitors []importexport.MonitorSpe
 		// nil stored config: nothing to carry over, so the placeholder simply
 		// drops and the refusal below cannot trigger.
 		cfg, _ = s.keepRedactedSecrets(m.Type, cfg, nil)
+		// A URL that carried a password inline comes out of the export with the
+		// placeholder in its userinfo; the password is dropped the same way and
+		// said so, because the monitor will fail its login until it is re-entered.
+		cfg, droppedURLs := dropMaskedURLPasswords(cfg)
+		for _, f := range droppedURLs {
+			res.Warnings = append(res.Warnings,
+				"monitor "+m.Name+": the password in "+f+" was redacted in the export; re-enter it")
+		}
 
 		interval := m.IntervalSeconds
 		if interval < 1 {
