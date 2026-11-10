@@ -1454,7 +1454,7 @@
         ],
         "operationId": "verifyTOTP",
         "summary": "Activate 2FA",
-        "description": "Any authenticated principal; CSRF required. On a valid code 2FA is enabled and a set of single-use backup codes is returned. They are shown only here.",
+        "description": "Any authenticated principal; CSRF required. On a valid code 2FA is enabled and a set of single-use backup codes is returned. They are shown only here. Completes an enrolment only: on an account that already has 2FA enabled it answers 409 — use `POST /api/v1/me/totp/backup-codes` to get new codes.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1492,6 +1492,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
           }
         }
       }
