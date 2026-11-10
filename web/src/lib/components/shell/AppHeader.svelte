@@ -12,7 +12,7 @@
 	import { session } from '$lib/stores/session.svelte';
 	import { navEntries } from './nav';
 	import { t } from '$lib/i18n';
-	import { Avatar, Kbd, safeDuration } from '$lib/design-system';
+	import { Avatar, BrandMark, Kbd, safeDuration } from '$lib/design-system';
 
 	let { onpalette }: { onpalette: () => void } = $props();
 
@@ -53,18 +53,7 @@
 <header class="appheader">
 	<div class="inner">
 		<a class="brand ds-focusable" href="/dashboard">
-			<span class="mark" aria-hidden="true">
-				<svg viewBox="0 0 64 64"
-					><path
-						d="M32 7 50 14v15c0 12-7.7 21.6-18 26-10.3-4.4-18-14-18-26V14L32 7Zm-12 25h7l4-8 6 16 4-8h3"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="4.5"
-						stroke-linecap="round"
-						stroke-linejoin="round"
-					/></svg
-				>
-			</span>
+			<span class="mark" aria-hidden="true"> <BrandMark size="1.25rem" /></span>
 			<span class="name">Statwarden</span>
 		</a>
 
@@ -216,10 +205,6 @@
 		background: var(--color-accent-tint);
 		border: 1px solid var(--hairline-strong);
 		flex-shrink: 0;
-	}
-	.mark svg {
-		width: 1.25rem;
-		height: 1.25rem;
 	}
 	.name {
 		font-size: var(--text-title-3);

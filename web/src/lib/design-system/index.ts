@@ -20,6 +20,7 @@ export {
 
 // Primitives
 export { default as AppBackground } from './components/AppBackground.svelte';
+export { default as BrandMark } from './components/BrandMark.svelte';
 export { default as GlassPanel } from './components/GlassPanel.svelte';
 export { default as GlassCard } from './components/GlassCard.svelte';
 export { default as PillButton } from './components/PillButton.svelte';

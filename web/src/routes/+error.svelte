@@ -14,7 +14,7 @@
 	import { page } from '$app/state';
 	import { session } from '$lib/stores/session.svelte';
 	import { t } from '$lib/i18n';
-	import { GlassPanel, PillButton } from '$lib/design-system';
+	import { BrandMark, GlassPanel, PillButton } from '$lib/design-system';
 
 	// The error page gets no props: SvelteKit exposes the status on page state.
 	const status = $derived(page.status);
@@ -47,18 +47,7 @@
 
 <main class="page">
 	<GlassPanel blur="thick" radius="lg" class="card">
-		<span class="mark" aria-hidden="true">
-			<svg viewBox="0 0 64 64"
-				><path
-					d="M32 7 50 14v15c0 12-7.7 21.6-18 26-10.3-4.4-18-14-18-26V14L32 7Zm-12 25h7l4-8 6 16 4-8h3"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="4.5"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-				/></svg
-			>
-		</span>
+		<span class="mark" aria-hidden="true"> <BrandMark size="1.5rem" /></span>
 		<p class="code" aria-hidden="true">{status}</p>
 		<h1>{isNotFound ? t('error.notFoundTitle') : t('error.genericTitle')}</h1>
 		<p class="body">{isNotFound ? t('error.notFoundBody') : t('error.genericBody')}</p>
@@ -100,10 +89,6 @@
 		background: var(--color-accent-tint);
 		border: 1px solid var(--glass-border);
 		box-shadow: var(--highlight-top);
-	}
-	.mark svg {
-		width: 1.5rem;
-		height: 1.5rem;
 	}
 	.code {
 		margin: 0;

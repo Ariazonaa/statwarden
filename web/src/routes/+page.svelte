@@ -4,7 +4,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { session } from '$lib/stores/session.svelte';
-	import { Skeleton } from '$lib/design-system';
+	import { BrandMark, Skeleton } from '$lib/design-system';
 
 	onMount(async () => {
 		await session.load();
@@ -18,16 +18,7 @@
 
 <div class="splash">
 	<div class="mark" aria-hidden="true">
-		<svg viewBox="0 0 64 64" role="img">
-			<path
-				d="M32 7 50 14v15c0 12-7.7 21.6-18 26-10.3-4.4-18-14-18-26V14L32 7Zm-12 25h7l4-8 6 16 4-8h3"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="4.5"
-				stroke-linecap="round"
-				stroke-linejoin="round"
-			/>
-		</svg>
+		<BrandMark size="2.25rem" />
 	</div>
 	<Skeleton width="8rem" height="0.75rem" />
 </div>
@@ -49,9 +40,5 @@
 		background: var(--color-accent-tint);
 		border: 1px solid var(--glass-border);
 		box-shadow: var(--highlight-top), var(--shadow-2);
-	}
-	.mark svg {
-		width: 2.25rem;
-		height: 2.25rem;
 	}
 </style>

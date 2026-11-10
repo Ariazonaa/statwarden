@@ -6,7 +6,7 @@
 	import type { OidcProvider } from '$lib/api';
 	import { session } from '$lib/stores/session.svelte';
 	import { t, type MessageKey } from '$lib/i18n';
-	import { GlassPanel, PillButton, TextField, toast } from '$lib/design-system';
+	import { BrandMark, GlassPanel, PillButton, TextField, toast } from '$lib/design-system';
 
 	let username = $state('');
 	let password = $state('');
@@ -150,18 +150,7 @@
 <main class="auth">
 	<GlassPanel blur="thick" radius="lg" class="card">
 		<div class="brand">
-			<span class="mark" aria-hidden="true">
-				<svg viewBox="0 0 64 64"
-					><path
-						d="M32 7 50 14v15c0 12-7.7 21.6-18 26-10.3-4.4-18-14-18-26V14L32 7Zm-12 25h7l4-8 6 16 4-8h3"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="4.5"
-						stroke-linecap="round"
-						stroke-linejoin="round"
-					/></svg
-				>
-			</span>
+			<span class="mark" aria-hidden="true"> <BrandMark size="1.5rem" /></span>
 			<h1>Statwarden</h1>
 		</div>
 
@@ -264,10 +253,6 @@
 		background: var(--color-accent-tint);
 		border: 1px solid var(--glass-border);
 		box-shadow: var(--highlight-top);
-	}
-	.mark svg {
-		width: 1.5rem;
-		height: 1.5rem;
 	}
 	h1 {
 		margin: 0;
