@@ -159,9 +159,15 @@ func maskURLPassword(raw string) string {
 // is why redactedSecretsMovedTarget errs towards refusing: an unrecognised
 // change plus a placeholder is still a request to re-type the credential, and
 // the cost of being wrong is one extra password prompt.
+//
+// "query" is not a destination but belongs here for the same reason: the
+// database checks report what their statement returned, so the query decides
+// what the credential is used to read, and a new one with a kept password is a
+// way to read data with access the caller was never shown.
 var targetFields = []string{
 	"url", "host", "port", "endpoint", "broker", "server",
 	"target", "resolver", "database", "proxy_url", "topic", "container",
+	"query",
 }
 
 // movedTarget reports whether a write changes where the monitor connects.
