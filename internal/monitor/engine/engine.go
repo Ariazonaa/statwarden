@@ -236,6 +236,13 @@ type job struct {
 	announcedDown bool
 	gen           uint64
 	timer         Timer
+	// timerSeq identifies the timer a callback belongs to. Stopping a timer
+	// whose callback has already started does not stop the callback: it is
+	// blocked on Engine.mu and runs as soon as the mutator releases it. Every
+	// arm and every stop advances timerSeq, and fire refuses a callback whose
+	// sequence is no longer current, so a late callback cannot start a check
+	// next to the timer that replaced it — two timer chains for one monitor.
+	timerSeq uint64
 }
 
 // New builds an Engine from opts. It does not schedule anything yet.
@@ -379,10 +386,7 @@ func (e *Engine) Upsert(m domain.Monitor) error {
 		}
 		e.jobs[m.ID] = j
 	}
-	if j.timer != nil {
-		j.timer.Stop()
-		j.timer = nil
-	}
+	e.stopTimerLocked(j)
 	// A change to what the check actually DOES invalidates a check already in
 	// flight: its result describes the old target, so letting it land would
 	// record a heartbeat — and possibly fire an alert — for an address this
@@ -435,10 +439,7 @@ func (e *Engine) Remove(id int64) {
 	}
 	j.removed = true
 	j.gen++
-	if j.timer != nil {
-		j.timer.Stop()
-		j.timer = nil
-	}
+	e.stopTimerLocked(j)
 	delete(e.jobs, id)
 	if e.anomaly != nil {
 		e.anomaly.Forget(id)
@@ -459,10 +460,7 @@ func (e *Engine) Pause(id int64) error {
 	// discarded on completion instead of overwriting the paused status or
 	// emitting a spurious event.
 	j.gen++
-	if j.timer != nil {
-		j.timer.Stop()
-		j.timer = nil
-	}
+	e.stopTimerLocked(j)
 	j.status = domain.StatusPaused
 	e.mu.Unlock()
 	e.persistStatus(id, domain.StatusPaused)
@@ -491,10 +489,7 @@ func (e *Engine) Resume(id int64) error {
 	// pause is now stale. It will neither persist a result nor re-arm the
 	// timer, so Resume takes over timer ownership.
 	j.gen++
-	if j.timer != nil {
-		j.timer.Stop()
-		j.timer = nil
-	}
+	e.stopTimerLocked(j)
 	if !j.passive && !j.running {
 		e.scheduleLocked(j, e.jitter(j.monitor.Interval))
 	}
@@ -524,12 +519,10 @@ func (e *Engine) CheckNow(id int64) error {
 		e.mu.Unlock()
 		return ErrCheckInProgress
 	}
-	if j.timer != nil {
-		j.timer.Stop()
-		j.timer = nil
-	}
+	e.stopTimerLocked(j)
+	seq := j.timerSeq
 	e.mu.Unlock()
-	e.fire(j)
+	e.fire(j, seq)
 	return nil
 }
 
@@ -598,17 +591,30 @@ func (e *Engine) scheduleLocked(j *job, delay time.Duration) {
 	if delay < 0 {
 		delay = 0
 	}
-	j.timer = e.clock.AfterFunc(delay, func() { e.fire(j) })
+	j.timerSeq++
+	seq := j.timerSeq
+	j.timer = e.clock.AfterFunc(delay, func() { e.fire(j, seq) })
+}
+
+// stopTimerLocked disarms j's timer and invalidates a callback of it that may
+// already be waiting for the lock; the caller holds e.mu.
+func (e *Engine) stopTimerLocked(j *job) {
+	if j.timer != nil {
+		j.timer.Stop()
+		j.timer = nil
+	}
+	j.timerSeq++
 }
 
 // fire moves a due job into a worker goroutine. Overlap and lifecycle checks
-// happen here so a stale timer can never start a second concurrent run.
-func (e *Engine) fire(j *job) {
+// happen here so a stale timer can never start a second concurrent run. seq is
+// the timerSeq the caller was armed (or, for CheckNow, cleared) under.
+func (e *Engine) fire(j *job, seq uint64) {
 	e.mu.Lock()
 	// j.passive is checked here too: a passive monitor is fed by the push
 	// endpoint and its watchdog, never by a timer, so a timer that somehow
 	// survived a type change must not start a check.
-	if e.stopping || j.removed || j.paused || j.passive || j.running {
+	if e.stopping || j.removed || j.paused || j.passive || j.running || seq != j.timerSeq {
 		e.mu.Unlock()
 		return
 	}

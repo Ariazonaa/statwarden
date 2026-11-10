@@ -97,6 +97,24 @@ func (c *fakeClock) Advance(d time.Duration) {
 	c.mu.Unlock()
 }
 
+// TakeDue marks every timer due by now+d as fired WITHOUT running it and hands
+// back the callbacks. It reproduces a real timer whose goroutine has started
+// but not yet reached the engine's lock: Stop on it already reports false.
+func (c *fakeClock) TakeDue(d time.Duration) []func() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	target := c.now.Add(d)
+	var due []func()
+	for _, t := range c.timers {
+		if t.fired || t.stopped || t.when.After(target) {
+			continue
+		}
+		t.fired = true
+		due = append(due, t.f)
+	}
+	return due
+}
+
 // Armed returns the number of timers that are still pending (neither fired
 // nor stopped) — i.e. how many concurrent timers a job currently owns.
 func (c *fakeClock) Armed() int {
@@ -1524,5 +1542,46 @@ func TestSubMillisecondLatencyIsNotRecordedAsZero(t *testing.T) {
 		if hb.Latency == nil || *hb.Latency != want[i] {
 			t.Fatalf("heartbeat %d latency = %v, want %s", i, hb.Latency, want[i])
 		}
+	}
+}
+
+// TestStaleTimerCallbackDoesNotStartASecondChain: a timer that has already
+// fired, but whose callback has not yet reached the engine's lock, cannot be
+// stopped. An Upsert landing in that window armed a fresh timer, and the late
+// callback then started a check of its own — from there on the monitor ran on
+// two independent timer chains, checking twice per interval.
+func TestStaleTimerCallbackDoesNotStartASecondChain(t *testing.T) {
+	reg := registry.New()
+	chk := &scriptChecker{typ: "fake", fallback: up()}
+	reg.Register(chk)
+
+	e, store, clk := newEngine(t, engine.Options{Registry: reg})
+	m := testMonitor(1, "fake")
+	if err := e.Upsert(m); err != nil {
+		t.Fatal(err)
+	}
+	stale := clk.TakeDue(0)
+	if len(stale) != 1 {
+		t.Fatalf("%d timers due, want 1", len(stale))
+	}
+	m.Name = "renamed"
+	if err := e.Upsert(m); err != nil { // re-arms; the fired timer is not stoppable
+		t.Fatal(err)
+	}
+	stale[0]() // the late callback finally gets the lock
+
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if n := clk.Armed(); n > 1 {
+			t.Fatalf("%d timers armed after a stale callback, want 1", n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	clk.Advance(0)
+	waitHeartbeats(t, store, 1)
+	waitFor(t, "re-arm", func() bool { return clk.Armed() == 1 })
+	if n := len(store.Heartbeats()); n != 1 {
+		t.Fatalf("%d checks ran, want 1", n)
 	}
 }
