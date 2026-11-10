@@ -37,7 +37,7 @@ jobs:
           echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # Scan a single-architecture build first. The push below happens only if
       # this step passes, so an image with a fixable CRITICAL or HIGH finding is
