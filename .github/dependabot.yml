@@ -1,9 +1,15 @@
 version: 2
+# Minor and patch updates are grouped into one pull request per ecosystem.
+# Major updates stay one per pull request, because each can break the build
+# on its own and has to be reviewed on its own. open-pull-requests-limit caps
+# how many of those wait at once: the first run after this file was added
+# opened thirteen at the same time.
 updates:
   - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 3
     groups:
       go-minor:
         update-types: [minor, patch]
@@ -12,16 +18,24 @@ updates:
     directory: /web
     schedule:
       interval: weekly
+    open-pull-requests-limit: 3
     groups:
       npm-minor:
         update-types: [minor, patch]
 
+  # Every action is pinned in the workflows and they move together, so one
+  # pull request carries all of them, majors included.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
+    open-pull-requests-limit: 2
+    groups:
+      actions:
+        patterns: ["*"]
 
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 3
