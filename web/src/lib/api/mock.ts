@@ -1754,9 +1754,10 @@ export const mockApi = {
 	},
 
 	// audit & settings
-	async auditLog() {
+	/** Omitting `limit` means the whole trail, which the real client pages through. */
+	async auditLog(limit?: number) {
 		await delay();
-		return clone(audit);
+		return clone(limit ? audit.slice(0, limit) : audit);
 	},
 	async getSettings() {
 		await delay();

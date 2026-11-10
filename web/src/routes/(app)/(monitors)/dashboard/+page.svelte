@@ -59,6 +59,9 @@
 	// Same reasoning as maintenanceFailed: a failed fetch is not "nothing here".
 	let certsFailed = $state(false);
 	let auditEntries = $state<AuditEntry[]>([]);
+	// The widget shows only the newest few, so only those are fetched: without a
+	// limit auditLog() walks the whole trail for the Activity screen's search.
+	const ACTIVITY_ROWS = 6;
 	let auditLoaded = $state(false);
 	let auditFailed = $state(false);
 
@@ -93,7 +96,7 @@
 			});
 		if (session.isAdmin) {
 			api
-				.auditLog()
+				.auditLog(ACTIVITY_ROWS)
 				.then((rows) => {
 					auditEntries = rows;
 					auditLoaded = true;
@@ -347,7 +350,12 @@
 							failed={maintenanceFailed}
 						/>
 					{:else if w.type === 'activity'}
-						<ActivityWidget entries={auditEntries} loaded={auditLoaded} failed={auditFailed} />
+						<ActivityWidget
+							entries={auditEntries}
+							loaded={auditLoaded}
+							failed={auditFailed}
+							limit={ACTIVITY_ROWS}
+						/>
 					{/if}
 				</WidgetFrame>
 			</div>

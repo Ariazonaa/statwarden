@@ -210,6 +210,71 @@ describe('monitor mapper', () => {
 	});
 });
 
+describe('list paging', () => {
+	/** One writeList() page of monitors with the given ids. */
+	const monitorPage = (ids: number[], total: number, offset: number) => ({
+		items: ids.map((id) => ({ ...wireMonitor, id })),
+		total,
+		limit: 200,
+		offset
+	});
+	const range = (from: number, n: number) => Array.from({ length: n }, (_, i) => from + i);
+	const query = (n: number) => new URL(calls[n].path, 'http://t').searchParams;
+
+	it('walks every page of the monitor list, not just the first 200', async () => {
+		reply(monitorPage(range(1, 200), 450, 0));
+		reply(monitorPage(range(201, 200), 450, 200));
+		reply(monitorPage(range(401, 50), 450, 400));
+		const all = await api.listMonitors();
+		expect(all).toHaveLength(450);
+		expect(all[449].id).toBe('450');
+		expect(calls.map((_, n) => query(n).get('offset'))).toEqual(['0', '200', '400']);
+		expect(query(0).get('limit')).toBe('200');
+	});
+
+	it('asks once when everything fits on the first page', async () => {
+		reply(monitorPage([1, 2], 2, 0));
+		await expect(api.listMonitors()).resolves.toHaveLength(2);
+		expect(calls).toHaveLength(1);
+	});
+
+	it('drops a row that a mid-walk insert shifted onto the next page', async () => {
+		// A newest-first list: one row added between the two requests pushes the
+		// last row of page one to the top of page two. A repeated id would break
+		// every keyed #each over the result.
+		reply(monitorPage(range(1, 200), 201, 0));
+		reply(monitorPage([200, 201], 202, 200));
+		const all = await api.listMonitors();
+		expect(all.map((m) => m.id)).toEqual(range(1, 201).map(String));
+	});
+
+	it('stops on an empty page even if the total claimed more', async () => {
+		// Rows deleted while walking: the total is stale, and trusting it alone
+		// would request empty pages forever.
+		reply(monitorPage(range(1, 200), 300, 0));
+		reply({ items: null, total: 300, limit: 200, offset: 200 });
+		await expect(api.listMonitors()).resolves.toHaveLength(200);
+		expect(calls).toHaveLength(2);
+	});
+
+	it('walks the whole audit trail for the search, and one page when given a limit', async () => {
+		const entry = (id: number) => ({
+			id,
+			action: 'monitor.create',
+			created_at: '2026-01-01T00:00:00Z'
+		});
+		reply({ items: range(1, 200).map(entry), total: 201, limit: 200, offset: 0 });
+		reply({ items: [entry(201)], total: 201, limit: 200, offset: 200 });
+		await expect(api.auditLog()).resolves.toHaveLength(201);
+		expect(calls).toHaveLength(2);
+
+		reply({ items: range(1, 6).map(entry), total: 201, limit: 6, offset: 0 });
+		await expect(api.auditLog(6)).resolves.toHaveLength(6);
+		expect(calls).toHaveLength(3);
+		expect(query(2).get('limit')).toBe('6');
+	});
+});
+
 describe('heartbeat and event mappers', () => {
 	const beats = [
 		{
