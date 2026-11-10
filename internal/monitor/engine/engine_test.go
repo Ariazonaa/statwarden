@@ -97,6 +97,14 @@ func (c *fakeClock) Advance(d time.Duration) {
 	c.mu.Unlock()
 }
 
+// Skip moves the clock forward WITHOUT firing anything, leaving due timers
+// overdue: the next Advance(0) fires them and the check sees exactly this time.
+func (c *fakeClock) Skip(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
 // TakeDue marks every timer due by now+d as fired WITHOUT running it and hands
 // back the callbacks. It reproduces a real timer whose goroutine has started
 // but not yet reached the engine's lock: Stop on it already reports false.

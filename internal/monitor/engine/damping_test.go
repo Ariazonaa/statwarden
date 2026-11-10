@@ -289,3 +289,21 @@ func TestBackoffNeverShortensTheInterval(t *testing.T) {
 		t.Fatalf("interval = %v, want the monitor's own 30m", d)
 	}
 }
+
+// A flap can end on the DOWN→UP transition itself, when the first check after
+// a quiet window is the one that recovers. Settling owed the announced outage a
+// recovery and sent it, and then the transition sent its own: two recoveries
+// for one outage.
+func TestFlappingThatEndsOnARecoverySendsOneRecovery(t *testing.T) {
+	chk, rec, store, clk := flapEngine(t, 4, down(), up(), down(), up(), down())
+	n := runChecks(t, clk, store, 1, 4, time.Minute) // up, down, up (trips), down
+	if got, want := kinds(rec.all()), "D U D F+ U~ D~"; got != want {
+		t.Fatalf("events while flapping = %q, want %q", got, want)
+	}
+	chk.setFallback(up())
+	clk.Skip(11 * time.Minute)        // the next check is the first after a quiet window
+	runChecks(t, clk, store, n, 1, 0) // returns after the re-arm, i.e. after every emit
+	if got, want := kinds(rec.all()), "D U D F+ U~ D~ F- U"; got != want {
+		t.Fatalf("events = %q, want %q", got, want)
+	}
+}
