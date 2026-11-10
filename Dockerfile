@@ -9,11 +9,19 @@
 # `docker buildx build --platform linux/amd64,linux/arm64` produces both
 # images without emulation. Plain `docker build` also works (TARGET* default
 # to the host platform).
+#
+# Every base image is pinned by tag AND digest. A tag is mutable: the same
+# `alpine:3.24` can name a different image tomorrow, so a rebuild of an old
+# commit would not reproduce what was scanned and shipped. The digest is the
+# multi-arch index, so buildx still picks the right platform. Dependabot's
+# docker ecosystem updates tag and digest together; the golang image is
+# excluded there and is bumped by hand with go.mod — refresh its digest with
+# `docker buildx imagetools inspect golang:<version>-alpine` at the same time.
 
 # --- Stage 1: frontend -------------------------------------------------------
 # The SvelteKit output is static and arch-independent, so always build it on
 # the fast native platform.
-FROM --platform=$BUILDPLATFORM node:26-alpine AS web
+FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:8996bb5821d62a8fd9bb27c1cb07462f3fdce6e47d640c6a881ead0b064ce216 AS web
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
@@ -30,7 +38,7 @@ RUN VITE_USE_MOCK=false npm run build
 #
 # CGO_ENABLED=0 below, so the alpine flavour of this image is irrelevant; only
 # the Go version is.
-FROM --platform=$BUILDPLATFORM golang:1.26.11-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.11-alpine@sha256:ae52b5bc6ed045a9ed26ab03dc19327a802a9cc9aa8b27ed57f5c6b60579b0bb AS build
 WORKDIR /src
 RUN apk add --no-cache git
 COPY go.mod go.sum ./
@@ -61,7 +69,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     -o /out/statwarden ./cmd/statwarden
 
 # --- Stage 3: runtime --------------------------------------------------------
-FROM alpine:3.22
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 # ca-certificates: outbound TLS checks/notifications. tzdata: quiet-hours and
 # scheduling in local time. wget (busybox, already present) powers the
 # healthcheck — no extra package needed.
@@ -70,9 +78,9 @@ FROM alpine:3.22
 # (BACKUP_ENABLED).
 #
 # VERSIONED ON PURPOSE, and it has to be. Alpine has no package called
-# `postgresql-client` — v3.22 ships postgresql15-client, postgresql16-client and
-# postgresql17-client, and nothing that aliases them. An unversioned name here
-# fails the image build outright.
+# `postgresql-client` — each branch ships one postgresqlNN-client per supported
+# major (v3.24: 16, 17 and 18) and nothing that aliases them. An unversioned
+# name here fails the image build outright.
 #
 # 17 rather than 16: pg_dump refuses a server NEWER than itself, so the client
 # has to be at least as new as the database it dumps. The compose stack runs
@@ -87,12 +95,12 @@ FROM alpine:3.22
 #
 # `apk add` only resolves what its named packages need, so anything that ships
 # INSIDE the base image and already satisfies a dependency is left at whatever
-# version the alpine:3.22 tag was built with. The image scan found exactly that:
-# libcrypto3/libssl3 at 3.5.7-r0 with CVE-2026-14456 (OpenSSL, unbounded memory
-# growth -> DoS) while 3.5.8-r0 had been in the 3.22 branch index the whole
+# version the base tag was built with. The image scan found exactly that on
+# 3.22: libcrypto3/libssl3 at 3.5.7-r0 with CVE-2026-14456 (OpenSSL, unbounded
+# memory growth -> DoS) while 3.5.8-r0 had been in the branch index the whole
 # time. Nothing in this file asked for openssl, so nothing upgraded it.
 #
-# This does not loosen the pin: the base stays alpine:3.22 and the upgrade is
+# This does not loosen the pin: the base stays on its branch and the upgrade is
 # bounded by that branch's index, which is where the `apk add` line below has
 # always taken its packages from anyway. What changes is that a rebuild now
 # picks up the branch's security fixes instead of freezing whatever the cached
