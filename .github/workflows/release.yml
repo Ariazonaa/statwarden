@@ -24,6 +24,17 @@ jobs:
           [[ "$TAG" =~ $semver ]] || { echo "::error::'$TAG' is not a vMAJOR.MINOR.PATCH tag"; exit 1; }
 
       - uses: actions/checkout@v7
+
+      # The release text is the version's section of CHANGELOG.md, so the notes
+      # on GitHub and the file in the repository cannot say different things.
+      # It runs before any build so a tag without a changelog entry fails in
+      # seconds; image.yml runs the same check, so it publishes no version
+      # image for that tag either.
+      - name: Release notes from CHANGELOG.md
+        run: |
+          bash .github/scripts/release-notes.sh "$GITHUB_REF_NAME" > notes.md
+          cat notes.md
+
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -64,13 +75,6 @@ jobs:
             done
           done
           ( cd dist && sha256sum *.tar.gz | tee SHA256SUMS )
-
-      # The release text is the version's section of CHANGELOG.md, so the notes
-      # on GitHub and the file in the repository cannot say different things.
-      - name: Release notes from CHANGELOG.md
-        run: |
-          bash .github/scripts/release-notes.sh "$GITHUB_REF_NAME" > notes.md
-          cat notes.md
 
       - uses: softprops/action-gh-release@v3
         with:
