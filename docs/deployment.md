@@ -143,12 +143,18 @@ to check that a self-built image behaves like the published one:
 docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
-For production, pin `STATWARDEN_IMAGE` to a commit tag rather than tracking
-`latest`. Then what is running is legible, and a rollback is a tag change:
+For production, pin `STATWARDEN_IMAGE` rather than tracking `latest`. Then
+what is running is legible, and a rollback is a tag change. A release version
+is the recommended pin; the short-SHA tag every push to `main` gets is the way
+to run a change that is not released yet:
 
 ```sh
-STATWARDEN_IMAGE=ghcr.io/ariazonaa/statwarden:<short-sha>
+STATWARDEN_IMAGE=ghcr.io/ariazonaa/statwarden:0.1.0         # a release: X.Y.Z, no leading v
+STATWARDEN_IMAGE=ghcr.io/ariazonaa/statwarden:<short-sha>   # a commit on main
 ```
+
+`X.Y` (for example `0.1`) also exists and moves to each patch release of that
+line; pin `X.Y.Z` if a restart must never change the version.
 
 - `db` is `postgres:16-alpine` with a `pg_isready` healthcheck; `app` waits for
   `service_healthy` before starting (`depends_on … condition`).
@@ -203,8 +209,9 @@ Releases are cut by pushing a semver tag (`vX.Y.Z`); the
 [release workflow](../.github/workflows/release.yml) attaches static
 `linux/amd64` and `linux/arm64` binaries to the GitHub release as `.tar.gz`, with
 a `SHA256SUMS` covering both. The version, commit and build date are linked into
-the binary and reported at `GET /api/v1/version`. The same tag also publishes a
-`vX.Y.Z` image tag on `ghcr.io/ariazonaa/statwarden`.
+the binary and reported at `GET /api/v1/version`. The same tag also publishes
+the image on `ghcr.io/ariazonaa/statwarden` as `X.Y.Z` and `X.Y` — without the
+leading `v`. A release never moves `latest`, which follows `main`.
 
 To build an image yourself from the same tree:
 
