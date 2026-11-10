@@ -222,6 +222,11 @@ func (s *server) handleUpdateMaintenance(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.refreshMaintenance(r.Context())
+	// Audited like create and delete. Moving a window or widening its scope
+	// silences alerts for whatever it now covers, so an edit is as much worth
+	// attributing as either of those.
+	p := principalFrom(r)
+	s.audit(r.Context(), &p.userID, "maintenance.update", "maintenance", &m.ID, clientIP(r), nil)
 	writeJSON(w, http.StatusOK, m)
 }
 
