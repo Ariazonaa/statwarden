@@ -2,8 +2,8 @@ name: Image
 
 # Builds the container image, scans it, and only then publishes it to
 # ghcr.io/ariazonaa/statwarden: on main as `latest` plus the short commit SHA,
-# on a vX.Y.Z tag additionally as that version. Pull requests build and scan
-# but never push.
+# on a vX.Y.Z tag as X.Y.Z and X.Y (never `latest`). Pull requests build and
+# scan but never push.
 
 on:
   push:
@@ -77,6 +77,10 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
+          # metadata-action adds `latest` to every semver tag by default, which
+          # would move `latest` back to a release commit behind main. `latest`
+          # comes only from the explicit main-branch entry below.
+          flavor: latest=false
           tags: |
             type=sha,format=short,prefix=,enable=${{ github.ref == 'refs/heads/main' }}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
