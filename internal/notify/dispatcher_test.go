@@ -2286,3 +2286,104 @@ func TestANewOutageAfterAnUndeliveredResolveStillAlerts(t *testing.T) {
 		t.Errorf("the second outage delivered %q, want down", last.Status)
 	}
 }
+
+// A DOWN that one channel never received stays in the outbox. If the monitor
+// recovers before the retry, the retry is about an outage that is over: running
+// it used to open a fresh outage, alert the working channels a second time and
+// arm reminders for a monitor that was up — with no recovery left to end it.
+func TestAReplayedDownAfterTheRecoveryDoesNotReopenTheOutage(t *testing.T) {
+	h := newHarness(t, Options{})
+	good := h.addChannel(t, "good")
+	bad := h.addChannel(t, "bad")
+	bad.FailWith(errors.New("provider down"))
+	h.assign(7, assignSpec{id: 1, typ: "good"}, assignSpec{id: 2, typ: "bad"})
+	h.store.SetMonitorSettings(7, MonitorSettings{Name: "API", ResendInterval: 3 * time.Minute})
+
+	t0 := h.clk.Now()
+	down := downEvent(7, "API")
+	down.At = t0
+	h.d.HandleStateChange(down)
+	h.drain(t)
+
+	up := upEvent(7, "API")
+	up.At = t0.Add(time.Minute)
+	h.d.HandleStateChange(up)
+	h.drain(t)
+	if good.Count() != 2 {
+		t.Fatalf("good channel got %d messages for down+up, want 2", good.Count())
+	}
+
+	// The DOWN's lease lapses and the sweeper replays it.
+	h.expireOutboxLeases()
+	h.d.sweepOutbox(context.Background())
+	h.drain(t)
+	if good.Count() != 2 {
+		t.Fatalf("good channel got %d messages, want still 2: the replayed DOWN "+
+			"announced an outage that had already ended (last: %q)",
+			good.Count(), good.Sent()[good.Count()-1].Status)
+	}
+	h.d.mu.Lock()
+	_, tracked := h.d.down[7]
+	h.d.mu.Unlock()
+	if tracked {
+		t.Fatal("the replayed DOWN left an outage tracked for a monitor that is up")
+	}
+	if pending := h.store.PendingOutbox(); len(pending) != 0 {
+		t.Fatalf("outbox still holds %+v: a superseded DOWN can never succeed", pending)
+	}
+}
+
+// The mirror image: a recovery that could not be delivered is replayed after
+// the monitor has gone down AGAIN. It belongs to the earlier outage, so it must
+// not announce "back online" during the current one or stop tracking it.
+func TestAReplayedRecoveryDoesNotResolveALaterOutage(t *testing.T) {
+	h := newHarness(t, Options{})
+	ch := h.addChannel(t, "c")
+	h.assign(8, assignSpec{id: 1, typ: "c"})
+	h.store.SetMonitorSettings(8, MonitorSettings{Name: "API"})
+
+	t0 := h.clk.Now()
+	down1 := downEvent(8, "API")
+	down1.At = t0
+	h.d.HandleStateChange(down1)
+	h.drain(t)
+
+	ch.FailWith(errors.New("provider down"))
+	up1 := upEvent(8, "API")
+	up1.At = t0.Add(time.Minute)
+	h.d.HandleStateChange(up1) // stays in the outbox
+	h.drain(t)
+	ch.FailWith(nil)
+
+	down2 := downEvent(8, "API")
+	down2.At = t0.Add(2 * time.Minute)
+	h.d.HandleStateChange(down2)
+	h.drain(t)
+	before := ch.Count()
+
+	h.expireOutboxLeases()
+	h.d.sweepOutbox(context.Background())
+	h.drain(t)
+	if ch.Count() != before {
+		t.Fatalf("the replayed recovery sent %q while the monitor is down",
+			ch.Sent()[ch.Count()-1].Status)
+	}
+	h.d.mu.Lock()
+	st, tracked := h.d.down[8]
+	resolving := tracked && st.resolving
+	h.d.mu.Unlock()
+	if !tracked || resolving {
+		t.Fatalf("the current outage is no longer tracked as open (tracked=%v resolving=%v)",
+			tracked, resolving)
+	}
+
+	// The real recovery of the second outage is still announced.
+	up2 := upEvent(8, "API")
+	up2.At = t0.Add(3 * time.Minute)
+	h.d.HandleStateChange(up2)
+	h.drain(t)
+	if ch.Count() != before+1 || ch.Sent()[ch.Count()-1].Status != domain.StatusUp {
+		t.Fatalf("the second outage's recovery was not delivered (messages %d, want %d)",
+			ch.Count(), before+1)
+	}
+}

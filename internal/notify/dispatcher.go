@@ -249,6 +249,18 @@ type Dispatcher struct {
 	// monitor's id stays for the life of the process: one int64 per purge, and
 	// its id can never be reissued.
 	forgotten map[int64]struct{}
+	// lastNotDown is, per monitor, the instant of the newest transition seen
+	// that left it in a state other than DOWN.
+	//
+	// It exists for the outbox. A DOWN that one channel never received stays
+	// there and is replayed after its lease — possibly long after the monitor
+	// recovered and that recovery was processed and cleared. Nothing in d.down
+	// distinguishes "this outage ended" from "this outage never began", so the
+	// replay opened a new one: a second DOWN to the channels that work, then
+	// reminders and escalations for a monitor that was up, with no recovery
+	// left to stop them. A DOWN older than this instant announces an outage
+	// that is already over and is discarded instead.
+	lastNotDown map[int64]time.Time
 
 	// digestBuf collects pending digest items per channel; digestTimer is
 	// armed while the buffer is non-empty.
@@ -299,6 +311,7 @@ func New(opts Options) *Dispatcher {
 		intakeDone:   make(chan struct{}),
 		down:         make(map[int64]*downState),
 		forgotten:    make(map[int64]struct{}),
+		lastNotDown:  map[int64]time.Time{},
 		mutes:        make(map[int64]time.Time),
 		digestBuf:    make(map[int64]*digestBuffer),
 	}
@@ -1029,6 +1042,7 @@ func (d *Dispatcher) processStateChange(ctx context.Context, ev domain.StateChan
 		// here would forget who was told DOWN, and the recovery that follows
 		// would find nobody to tell.
 		if ev.To != domain.StatusDown && ev.SuppressReason != domain.SuppressFlapping {
+			d.noteNotDown(ev.MonitorID, ev.At)
 			d.clearDown(ev.MonitorID)
 		}
 		return outcomeDone
@@ -1043,6 +1057,7 @@ func (d *Dispatcher) processStateChange(ctx context.Context, ev domain.StateChan
 		// up→pending, pending→up (first success after start), … — the
 		// state machine's intermediate steps never alert.
 		if ev.To == domain.StatusUp {
+			d.noteNotDown(ev.MonitorID, ev.At)
 			d.clearDown(ev.MonitorID)
 		}
 		d.log.Debug("state change without alert",
@@ -1051,7 +1066,40 @@ func (d *Dispatcher) processStateChange(ctx context.Context, ev domain.StateChan
 	}
 }
 
+// noteNotDown records that the monitor was seen leaving DOWN (or never being in
+// it) at the given instant. See Dispatcher.lastNotDown. An event without a
+// timestamp says nothing about order and is ignored.
+func (d *Dispatcher) noteNotDown(monitorID int64, at time.Time) {
+	if at.IsZero() {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if at.After(d.lastNotDown[monitorID]) {
+		d.lastNotDown[monitorID] = at
+	}
+}
+
+// supersededDown reports whether a DOWN describes an outage that a later
+// transition, already processed, has ended.
+func (d *Dispatcher) supersededDown(sc domain.StateChange) bool {
+	if sc.At.IsZero() {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return sc.At.Before(d.lastNotDown[sc.MonitorID])
+}
+
 func (d *Dispatcher) processDown(ctx context.Context, sc domain.StateChange) outcome {
+	// Only a replay can be superseded: a live event is processed in the order
+	// the engine emitted it. outcomeDone, so the row is cleared rather than
+	// retried up to its budget for an alert that must never be sent.
+	if d.supersededDown(sc) {
+		d.log.Info("alert dropped: the outage it announces has already ended",
+			"monitor_id", sc.MonitorID, "name", sc.MonitorName, "at", sc.At)
+		return outcomeDone
+	}
 	now := d.clock.Now()
 	settings := d.monitorSettings(ctx, sc.MonitorID, sc.MonitorName)
 	assignments, err := d.store.Assignments(ctx, sc.MonitorID)
@@ -1158,8 +1206,20 @@ func (d *Dispatcher) markNotified(monitorID int64, st *downState, reached []int6
 }
 
 func (d *Dispatcher) processRecovery(ctx context.Context, sc domain.StateChange) outcome {
+	d.noteNotDown(sc.MonitorID, sc.At)
 	d.mu.Lock()
 	st, tracked := d.down[sc.MonitorID]
+	// A recovery from before the tracked outage began belongs to an EARLIER
+	// outage: its delivery failed, the monitor went down again, and the outbox
+	// is now replaying it. Acting on it would announce "back online" while the
+	// monitor is down and drop the tracking of the outage that is actually
+	// open, so its own recovery later found nothing to resolve.
+	if tracked && !sc.At.IsZero() && sc.At.Before(st.since) {
+		d.mu.Unlock()
+		d.log.Info("recovery dropped: the monitor has gone down again since",
+			"monitor_id", sc.MonitorID, "name", sc.MonitorName, "at", sc.At)
+		return outcomeDone
+	}
 	var notified map[int64]bool
 	var since time.Time
 	if tracked {
@@ -1505,6 +1565,8 @@ func (d *Dispatcher) Forget(monitorID int64) {
 	d.forgotten[monitorID] = struct{}{}
 	d.clearDownLocked(monitorID)
 	delete(d.mutes, monitorID)
+	// The tombstone above already stops every event for this monitor.
+	delete(d.lastNotDown, monitorID)
 }
 
 // isForgotten reports whether this monitor has been binned or purged.
