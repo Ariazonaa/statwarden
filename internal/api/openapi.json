@@ -4531,7 +4531,8 @@
         "required": true,
         "description": "The passive monitor's push token.",
         "schema": {
-          "type": "string"
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
         }
       },
       "BadgeToken": {

@@ -2,14 +2,51 @@ package api
 
 import (
 	"errors"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Ariazonaa/statwarden/internal/monitor/push"
 )
+
+// maxPushMessageBytes bounds the free-text msg of a push beat. It is written by
+// an unauthenticated caller into every heartbeat row, the live feed and alert
+// bodies; a status note does not need more.
+const maxPushMessageBytes = 2048
+
+// isPushToken reports whether s has the shape push.GenerateToken mints: 32
+// lowercase hex characters. Anything else cannot match a stored hash.
+func isPushToken(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// pushMessage makes a caller-supplied msg storable and bounded. PostgreSQL text
+// refuses NUL and invalid UTF-8, so either one turned the beat into a 500 and
+// the watchdog then saw no beat at all. The cut lands on a rune boundary.
+func pushMessage(raw string) string {
+	msg := strings.ToValidUTF8(strings.ReplaceAll(raw, "\x00", ""), "�")
+	if len(msg) <= maxPushMessageBytes {
+		return msg
+	}
+	cut := maxPushMessageBytes
+	for cut > 0 && !utf8.RuneStart(msg[cut]) {
+		cut--
+	}
+	return msg[:cut]
+}
 
 // handlePush records an incoming push heartbeat for a passive monitor. It is
 // public and rate-limited: the observed service (cron job, backup script, …)
@@ -23,6 +60,14 @@ func (s *server) handlePush(w http.ResponseWriter, r *http.Request) {
 	token := chi.URLParam(r, "token")
 	if token == "" {
 		writeProblemDetail(w, http.StatusBadRequest, "missing push token")
+		return
+	}
+	// Checked BEFORE the limiter, because the per-token limiter keys on this
+	// string: unchecked, every distinct path became its own map entry for a full
+	// window, and an anonymous caller could grow that map with keys as long as
+	// the request line allows. A malformed token is answered like an unknown one.
+	if !isPushToken(token) {
+		writeProblemDetail(w, http.StatusNotFound, "unknown push token")
 		return
 	}
 	// Two brakes, and the order matters. The per-IP one is a coarse flood guard
@@ -41,15 +86,19 @@ func (s *server) handlePush(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := r.URL.Query()
+	msg := q.Get("msg")
+	if msg == "" {
+		msg = q.Get("message")
+	}
 	beat := push.Beat{
 		Status:  strings.ToLower(q.Get("status")),
-		Message: q.Get("msg"),
-	}
-	if beat.Message == "" {
-		beat.Message = q.Get("message")
+		Message: pushMessage(msg),
 	}
 	if raw := q.Get("ping"); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
+			// latency_ms is an int4 column and the recorder widens ping to a
+			// Duration in milliseconds; past MaxInt32 both wrapped silently.
+			n = min(n, math.MaxInt32)
 			beat.Ping = &n
 		}
 	}
