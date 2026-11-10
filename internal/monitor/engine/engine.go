@@ -786,7 +786,7 @@ func (e *Engine) runCheck(j *job, m domain.Monitor, prev domain.MonitorStatus, r
 		// A flap ends before this check's own transition is looked at: a change
 		// arriving after a whole quiet window is an ordinary alert again, not one
 		// more held back.
-		e.settleFlapping(j, m, next, res.Message, now)
+		e.settleFlapping(j, m, next, transitioned && prev == domain.StatusDown && next == domain.StatusUp, res.Message, now)
 		suppressedDown, downSince := e.wasDownSuppressed(j)
 		switch {
 		case transitioned:
@@ -1116,7 +1116,10 @@ func (e *Engine) noteFlap(j *job, now time.Time) (started bool, changes int) {
 // (see domain.SuppressFlapping), so nothing else would ever close it. Settling
 // DOWN needs nothing here — a held-back DOWN left downSuppressed set, and the
 // re-announce in runCheck picks it up in this very check.
-func (e *Engine) settleFlapping(j *job, m domain.Monitor, status domain.MonitorStatus, message string, now time.Time) {
+//
+// recovering says this check is itself the DOWN→UP transition. Its own event
+// is the recovery the outage is owed, so settling must not send another.
+func (e *Engine) settleFlapping(j *job, m domain.Monitor, status domain.MonitorStatus, recovering bool, message string, now time.Time) {
 	e.mu.Lock()
 	if !j.flapping || len(j.flapEdges) == 0 || now.Sub(j.flapEdges[len(j.flapEdges)-1]) < e.flapWindow {
 		e.mu.Unlock()
@@ -1124,7 +1127,7 @@ func (e *Engine) settleFlapping(j *job, m domain.Monitor, status domain.MonitorS
 	}
 	held := j.flapHeld
 	j.flapping, j.flapHeld, j.flapEdges = false, 0, nil
-	owed := status == domain.StatusUp && j.announcedDown
+	owed := status == domain.StatusUp && j.announcedDown && !recovering
 	e.mu.Unlock()
 
 	e.emitFlapping(m, true, held, status, now)
