@@ -97,6 +97,7 @@ type Recorder struct {
 	store    Store
 	clock    func() time.Time
 	onEvent  func(domain.StateChange)
+	onStatus func(int64, domain.MonitorStatus)
 	suppress Suppressor
 	log      *slog.Logger
 }
@@ -112,6 +113,16 @@ type Options struct {
 	// Suppress applies the same alert-suppression rules the scheduler applies.
 	// May be nil (nothing is ever suppressed).
 	Suppress Suppressor
+	// OnStatus is told the new status of a push monitor each time this package
+	// changes it. May be nil.
+	//
+	// The scheduler suppresses a child's alerts while its parent is DOWN, and
+	// reads the parent's status from memory. For a push parent nothing in the
+	// scheduler ever updates that: the recorder and the watchdog write the row
+	// and were the only ones who knew. Without this the value stayed whatever
+	// the row said at process start — a parent that was DOWN then silenced its
+	// children forever, and one that went DOWN later silenced nothing.
+	OnStatus func(monitorID int64, status domain.MonitorStatus)
 	Logger   *slog.Logger
 }
 
@@ -124,7 +135,7 @@ func NewRecorder(o Options) *Recorder {
 		o.Logger = slog.Default()
 	}
 	return &Recorder{
-		store: o.Store, clock: o.Clock, onEvent: o.OnEvent,
+		store: o.Store, clock: o.Clock, onEvent: o.OnEvent, onStatus: o.OnStatus,
 		suppress: o.Suppress, log: o.Logger,
 	}
 }
@@ -182,6 +193,11 @@ func (r *Recorder) Record(ctx context.Context, token string, beat Beat) (domain.
 		return domain.Monitor{}, err
 	}
 	if prev != status {
+		// Before the event: the scheduler should already know the parent's new
+		// status when anything reacts to the transition.
+		if r.onStatus != nil {
+			r.onStatus(m.ID, status)
+		}
 		r.emit(m, prev, status, beat.Message, now)
 	}
 	m.Status = status
@@ -209,6 +225,7 @@ type Watchdog struct {
 	store    Store
 	clock    func() time.Time
 	onEvent  func(domain.StateChange)
+	onStatus func(int64, domain.MonitorStatus)
 	suppress Suppressor
 	log      *slog.Logger
 }
@@ -222,7 +239,7 @@ func NewWatchdog(o Options) *Watchdog {
 		o.Logger = slog.Default()
 	}
 	return &Watchdog{
-		store: o.Store, clock: o.Clock, onEvent: o.OnEvent,
+		store: o.Store, clock: o.Clock, onEvent: o.OnEvent, onStatus: o.OnStatus,
 		suppress: o.Suppress, log: o.Logger,
 	}
 }
@@ -263,6 +280,9 @@ func (w *Watchdog) Sweep(ctx context.Context) (int, error) {
 		}
 		if !changed {
 			continue
+		}
+		if w.onStatus != nil {
+			w.onStatus(pm.Monitor.ID, domain.StatusDown)
 		}
 		if w.onEvent != nil {
 			ev := domain.StateChange{

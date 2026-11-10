@@ -533,6 +533,21 @@ func (e *Engine) CheckNow(id int64) error {
 	return nil
 }
 
+// SetPassiveStatus records the current status of a passive (push) monitor.
+//
+// The engine never checks one, so it cannot observe the change itself; the push
+// recorder and its watchdog call this when they write the row. The only reader
+// is baseSuppression, deciding whether a child's alert is held back because its
+// parent is DOWN. A monitor that is unknown or not passive is left alone — the
+// scheduler owns the status of everything it checks.
+func (e *Engine) SetPassiveStatus(id int64, status domain.MonitorStatus) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if j, ok := e.jobs[id]; ok && j.passive {
+		j.monitor.Status = status
+	}
+}
+
 // StatusOf returns the engine's in-memory state for a monitor.
 func (e *Engine) StatusOf(id int64) (domain.MonitorStatus, bool) {
 	e.mu.Lock()
@@ -1133,10 +1148,12 @@ func (e *Engine) baseSuppression(m domain.Monitor, at time.Time) (suppressed boo
 		// children forever, and one that went DOWN later suppressed nothing.
 		//
 		// For a passive parent the ROW is the authority — the push recorder and
-		// its watchdog write it — and the engine holds the monitor it was last
-		// Upserted with, which the API rewrites on every change. Simply giving up
-		// would have been the other half-fix: a push-monitored gateway going down
-		// would then page for every child instead of once for the parent.
+		// its watchdog write it. The engine holds the monitor it was last
+		// Upserted with, and those two report every status they write through
+		// SetPassiveStatus; without that report the copy here was only ever as
+		// fresh as the last API edit. Simply giving up would have been the other
+		// half-fix: a push-monitored gateway going down would then page for every
+		// child instead of once for the parent.
 		parentDown := ok && parent.status == domain.StatusDown
 		if ok && parent.passive {
 			parentDown = parent.monitor.Status == domain.StatusDown

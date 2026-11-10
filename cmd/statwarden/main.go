@@ -478,8 +478,11 @@ func run() error {
 		// Suppress is the engine itself: push monitors never pass through the
 		// scheduler's emit path, so without this hook their alerts ignore
 		// maintenance windows and a DOWN parent entirely.
+		// OnStatus is the engine too, for the opposite direction: it is how the
+		// scheduler learns that a push monitor used as a PARENT changed status.
 		pushOpts := push.Options{
-			Store: pushStore, OnEvent: onStateChange, Suppress: eng, Logger: logger,
+			Store: pushStore, OnEvent: onStateChange, Suppress: eng,
+			OnStatus: eng.SetPassiveStatus, Logger: logger,
 		}
 		pushRec = push.NewRecorder(pushOpts)
 		wd := push.NewWatchdog(pushOpts)

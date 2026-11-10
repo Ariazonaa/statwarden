@@ -1434,3 +1434,68 @@ func TestAPassiveParentStillSuppressesItsChildren(t *testing.T) {
 			"DOWN must still silence its children", ev)
 	}
 }
+
+// The engine never checks a push monitor, so the status it holds for one is
+// whatever the row said when the job was created. A push parent that went DOWN
+// afterwards therefore silenced nothing, and its children paged one by one.
+func TestAPassiveParentThatGoesDownLaterSuppressesItsChildren(t *testing.T) {
+	reg := registry.New()
+	reg.Register(&scriptChecker{typ: "fake", fallback: down()})
+	reg.Register(&passiveChecker{scriptChecker{typ: "push"}})
+	rec := &eventRecorder{}
+	e, _, clk := newEngine(t, engine.Options{Registry: reg, OnEvent: rec.record})
+
+	parent := testMonitor(1, "push")
+	parent.Status = domain.StatusUp
+	if err := e.Upsert(parent); err != nil {
+		t.Fatal(err)
+	}
+	child := testMonitor(2, "fake")
+	pid := parent.ID
+	child.ParentID = &pid
+	if err := e.Upsert(child); err != nil {
+		t.Fatal(err)
+	}
+
+	// The watchdog trips the parent and reports it.
+	e.SetPassiveStatus(parent.ID, domain.StatusDown)
+
+	clk.Advance(2 * time.Minute)
+	waitFor(t, "the child's DOWN", func() bool { return len(rec.all()) >= 1 })
+	ev := rec.all()[0]
+	if !ev.Suppressed || ev.SuppressReason != "parent-down" {
+		t.Errorf("child event = %+v, want suppressed by parent-down", ev)
+	}
+}
+
+// And the other direction, which is the one that loses alerts: a push parent
+// that was DOWN when the process started and has since recovered kept every
+// child's alert suppressed for the life of the process.
+func TestAPassiveParentThatRecoversStopsSuppressingItsChildren(t *testing.T) {
+	reg := registry.New()
+	reg.Register(&scriptChecker{typ: "fake", fallback: down()})
+	reg.Register(&passiveChecker{scriptChecker{typ: "push"}})
+	rec := &eventRecorder{}
+	e, _, clk := newEngine(t, engine.Options{Registry: reg, OnEvent: rec.record})
+
+	parent := testMonitor(1, "push")
+	parent.Status = domain.StatusDown
+	if err := e.Upsert(parent); err != nil {
+		t.Fatal(err)
+	}
+	child := testMonitor(2, "fake")
+	pid := parent.ID
+	child.ParentID = &pid
+	if err := e.Upsert(child); err != nil {
+		t.Fatal(err)
+	}
+
+	// A push arrives: the parent is back.
+	e.SetPassiveStatus(parent.ID, domain.StatusUp)
+
+	clk.Advance(2 * time.Minute)
+	waitFor(t, "the child's DOWN", func() bool { return len(rec.all()) >= 1 })
+	if ev := rec.all()[0]; ev.Suppressed {
+		t.Errorf("child event = %+v, want a live alert: its parent has recovered", ev)
+	}
+}

@@ -356,3 +356,50 @@ func TestNilSuppressorLeavesAlertsLive(t *testing.T) {
 		t.Fatalf("event should not be suppressed: %+v", events)
 	}
 }
+
+// statusLog records what the recorder and the watchdog report through OnStatus.
+type statusLog struct {
+	ids      []int64
+	statuses []domain.MonitorStatus
+}
+
+func (l *statusLog) record(id int64, st domain.MonitorStatus) {
+	l.ids = append(l.ids, id)
+	l.statuses = append(l.statuses, st)
+}
+
+// The scheduler decides whether a child's alert is suppressed from the parent's
+// status, and for a push parent only this package ever learns that status has
+// changed. It has to say so.
+func TestRecorderReportsANewStatus(t *testing.T) {
+	store := NewMemStore(pushMonitor(1, "tok", domain.StatusDown))
+	var log statusLog
+	r := NewRecorder(Options{
+		Store:    store,
+		Clock:    func() time.Time { return time.Unix(1000, 0) },
+		OnStatus: log.record,
+	})
+	if _, err := r.Record(context.Background(), "tok", Beat{Status: "up"}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if len(log.ids) != 1 || log.ids[0] != 1 || log.statuses[0] != domain.StatusUp {
+		t.Fatalf("OnStatus calls = %+v, want one (1, up)", log)
+	}
+}
+
+func TestWatchdogReportsTheTrip(t *testing.T) {
+	store := NewMemStore(pushMonitor(1, "tok", domain.StatusUp))
+	_ = store.SaveHeartbeat(context.Background(), domain.Heartbeat{MonitorID: 1, CheckedAt: time.Unix(1000, 0), Status: domain.StatusUp})
+	var log statusLog
+	w := NewWatchdog(Options{
+		Store:    store,
+		Clock:    func() time.Time { return time.Unix(9000, 0) },
+		OnStatus: log.record,
+	})
+	if n, err := w.Sweep(context.Background()); err != nil || n != 1 {
+		t.Fatalf("Sweep = %d, %v; want 1 trip", n, err)
+	}
+	if len(log.ids) != 1 || log.ids[0] != 1 || log.statuses[0] != domain.StatusDown {
+		t.Fatalf("OnStatus calls = %+v, want one (1, down)", log)
+	}
+}
