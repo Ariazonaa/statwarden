@@ -5,6 +5,7 @@
  */
 import { goto } from '$app/navigation';
 import { api, ApiError, type User } from '$lib/api';
+import { onUnauthorized } from '$lib/api/client';
 
 class SessionStore {
 	user = $state<User | undefined>(undefined);
@@ -58,6 +59,18 @@ class SessionStore {
 		}
 	}
 
+	/**
+	 * The server stopped accepting the session mid-use: it expired, was revoked
+	 * from another device, or the account was deactivated. Only acts when a user
+	 * was signed in — a public page probing /me while logged out is not an
+	 * expiry, and redirecting it would bounce visitors to the login screen.
+	 */
+	expire(): void {
+		if (!this.user) return;
+		this.user = undefined;
+		void goto('/login');
+	}
+
 	/** Route guard used by the authenticated layout. */
 	async guard(): Promise<boolean> {
 		if (this.loading) await this.load();
@@ -74,3 +87,5 @@ class SessionStore {
 }
 
 export const session = new SessionStore();
+
+onUnauthorized(() => session.expire());

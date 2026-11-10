@@ -157,3 +157,43 @@ describe('ws reconnect reconciliation', () => {
 		expect(cb).not.toHaveBeenCalled();
 	});
 });
+
+describe('ws session loss', () => {
+	async function watchUnauthorized() {
+		// Same module instance the freshly imported store uses (resetModules ran
+		// in beforeEach, and the store pulled client in with it).
+		const { onUnauthorized } = await import('$lib/api/client');
+		const expired = vi.fn();
+		onUnauthorized(expired);
+		return expired;
+	}
+
+	it('reports the hub closing an open socket over an expired session', async () => {
+		const expired = await watchUnauthorized();
+		ws.connect();
+		const sock = FakeWebSocket.instances[0];
+		sock.fireOpen();
+		sock.fireMessage({ type: 'error', message: 'session expired' });
+		expect(expired).toHaveBeenCalledTimes(1);
+	});
+
+	it('reports a private subscription refused on an anonymous reconnect', async () => {
+		const expired = await watchUnauthorized();
+		ws.connect();
+		const sock = FakeWebSocket.instances[0];
+		sock.fireOpen();
+		ws.subscribe('dashboard:all');
+		sock.fireMessage({ type: 'error', message: 'authentication required for this topic' });
+		expect(expired).toHaveBeenCalledTimes(1);
+	});
+
+	it('leaves unrelated hub errors alone', async () => {
+		const expired = await watchUnauthorized();
+		ws.connect();
+		const sock = FakeWebSocket.instances[0];
+		sock.fireOpen();
+		sock.fireMessage({ type: 'error', message: 'unknown topic' });
+		sock.fireMessage({ type: 'error', message: 'subscription limit reached' });
+		expect(expired).not.toHaveBeenCalled();
+	});
+});

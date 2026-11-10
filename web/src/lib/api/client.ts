@@ -139,6 +139,40 @@ export function csrfToken(): string {
 	return '';
 }
 
+/**
+ * Listener for "the session behind this tab is gone". A single slot rather than
+ * a list: the session store is the one owner, and a second registration
+ * replacing the first is what a hot-reloaded module wants.
+ */
+let unauthorizedHandler: (() => void) | undefined;
+
+/** Registers the callback run when a request proves the session has ended. */
+export function onUnauthorized(handler: () => void): void {
+	unauthorizedHandler = handler;
+}
+
+/**
+ * Reports that the server no longer accepts this tab's session. Exported for the
+ * WebSocket store, whose rejections arrive as frames rather than as responses.
+ */
+export function reportUnauthorized(): void {
+	unauthorizedHandler?.();
+}
+
+/**
+ * A 401 means "no valid session" everywhere except on two families of routes
+ * where it is an ordinary answer to the request itself: the auth endpoints
+ * (wrong password, missing second factor) and the public status pages (the
+ * page's own password). A revoked or expired session otherwise surfaced as a
+ * scatter of failing requests and toasts on a dashboard that still looked
+ * signed in.
+ */
+function noteUnauthorized(path: string, status: number): void {
+	if (status !== 401) return;
+	if (path.startsWith('/auth/') || path.startsWith('/public/')) return;
+	reportUnauthorized();
+}
+
 async function http<T>(
 	method: Method,
 	path: string,
@@ -170,6 +204,7 @@ async function http<T>(
 	// unreachable code.
 	const json = parseJSONOrUndefined(text);
 	if (!res.ok) {
+		noteUnauthorized(path, res.status);
 		const problem: Problem =
 			json && typeof json === 'object' && 'title' in json
 				? (json as Problem)
@@ -210,6 +245,7 @@ async function raw<T>(path: string, data: ArrayBuffer): Promise<T> {
 	// unreachable code.
 	const json = parseJSONOrUndefined(text);
 	if (!res.ok) {
+		noteUnauthorized(path, res.status);
 		const problem: Problem =
 			json && typeof json === 'object' && 'title' in json
 				? (json as Problem)
@@ -251,6 +287,7 @@ async function upload<T>(path: string, field: string, file: File): Promise<T> {
 	// unreachable code.
 	const json = parseJSONOrUndefined(text);
 	if (!res.ok) {
+		noteUnauthorized(path, res.status);
 		const problem: Problem =
 			json && typeof json === 'object' && 'title' in json
 				? (json as Problem)
