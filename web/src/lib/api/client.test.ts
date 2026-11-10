@@ -645,7 +645,7 @@ describe('read-only mappers', () => {
 			id: 5,
 			user_id: 2,
 			name: 'ci',
-			prefix: 'upt_ab',
+			prefix: 'statwarden_ab',
 			scopes: ['read'],
 			last_used_at: '2026-01-08T00:00:00Z',
 			created_at: '2026-01-01T00:00:00Z'
@@ -656,18 +656,18 @@ describe('read-only mappers', () => {
 			id: '5',
 			name: 'ci',
 			scopes: ['read'],
-			prefix: 'upt_ab',
+			prefix: 'statwarden_ab',
 			token: undefined,
 			lastUsedAt: '2026-01-08T00:00:00Z',
 			createdAt: '2026-01-01T00:00:00Z'
 		});
-		reply({ api_key: wire, secret: 'upt_ab_plaintext' });
+		reply({ api_key: wire, secret: 'statwarden_ab_plaintext' });
 		const created = await api.createApiKey({
 			name: 'ci',
 			scopes: ['read'],
 			confirm: { password: 'pw', totpCode: '123456' }
 		});
-		expect(created.token).toBe('upt_ab_plaintext');
+		expect(created.token).toBe('statwarden_ab_plaintext');
 		// The re-authentication travels flattened and snake_cased, alongside the
 		// key's own fields — the server reads one object (createAPIKeyRequest
 		// embeds stepUp), not a nested one. A wrong shape here does not fail
