@@ -2,7 +2,7 @@ module github.com/Ariazonaa/statwarden
 
 go 1.26.11
 
-// Raised for security, not for a language feature, twice now. 1.26.5 → 1.26.6
+// Raised for security and patch currency, never for a language feature. 1.26.5 → 1.26.6
 // for GO-2026-5026, -5972, -6088, -6089, -6090, -6091 and -6218; 1.26.6 →
 // 1.26.10 for twelve more REACHABLE standard-library advisories (GO-2026-6599
 // through -6809: net/http, net/textproto, crypto/tls, crypto/x509,
