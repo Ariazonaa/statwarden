@@ -243,6 +243,12 @@ type job struct {
 	// sequence is no longer current, so a late callback cannot start a check
 	// next to the timer that replaced it — two timer chains for one monitor.
 	timerSeq uint64
+	// persistMu serialises a completing check's writes with Pause and Resume,
+	// which write the status column too. The generation check alone could not:
+	// it ran before the check's writes, so a Pause landing in between stored
+	// "paused" and the check then overwrote it with its own result. Lock order
+	// is persistMu before Engine.mu; persistMu is never taken under Engine.mu.
+	persistMu sync.Mutex
 }
 
 // New builds an Engine from opts. It does not schedule anything yet.
@@ -446,14 +452,33 @@ func (e *Engine) Remove(id int64) {
 	}
 }
 
-// Pause disarms a monitor's timer and records the paused status.
-func (e *Engine) Pause(id int64) error {
+// lockJobForStatusWrite returns the job for id with both j.persistMu and e.mu
+// held, in that order, for a mutator that writes the status column. The caller
+// releases e.mu and then, after its write, j.persistMu.
+func (e *Engine) lockJobForStatusWrite(id int64) (*job, error) {
 	e.mu.Lock()
 	j, ok := e.jobs[id]
+	e.mu.Unlock()
 	if !ok {
-		e.mu.Unlock()
-		return ErrUnknownMonitor
+		return nil, ErrUnknownMonitor
 	}
+	j.persistMu.Lock()
+	e.mu.Lock()
+	if j.removed {
+		e.mu.Unlock()
+		j.persistMu.Unlock()
+		return nil, ErrUnknownMonitor
+	}
+	return j, nil
+}
+
+// Pause disarms a monitor's timer and records the paused status.
+func (e *Engine) Pause(id int64) error {
+	j, err := e.lockJobForStatusWrite(id)
+	if err != nil {
+		return err
+	}
+	defer j.persistMu.Unlock()
 	j.paused = true
 	j.monitor.Active = false
 	// Advance the generation so a check that started before this Pause is
@@ -470,12 +495,11 @@ func (e *Engine) Pause(id int64) error {
 // Resume re-schedules a paused monitor; its state restarts at PENDING with a
 // fresh retry counter and a jittered first check.
 func (e *Engine) Resume(id int64) error {
-	e.mu.Lock()
-	j, ok := e.jobs[id]
-	if !ok {
-		e.mu.Unlock()
-		return ErrUnknownMonitor
+	j, err := e.lockJobForStatusWrite(id)
+	if err != nil {
+		return err
 	}
+	defer j.persistMu.Unlock()
 	j.paused = false
 	j.monitor.Active = true
 	j.status = domain.StatusPending
@@ -737,6 +761,15 @@ func (e *Engine) runCheck(j *job, m domain.Monitor, prev domain.MonitorStatus, r
 	// or a deactivating Upsert advanced the generation while the check ran,
 	// its result is stale: discard it entirely (no heartbeat, no status
 	// write, no event) so it cannot overwrite state decided after it started.
+	// persistMu keeps that verdict true until the writes are done; the deferred
+	// unlock is for a panic below, which must not leave Pause blocked forever.
+	j.persistMu.Lock()
+	persistHeld := true
+	defer func() {
+		if persistHeld {
+			j.persistMu.Unlock()
+		}
+	}()
 	e.mu.Lock()
 	current := !j.removed && j.gen == gen
 	e.mu.Unlock()
@@ -799,6 +832,8 @@ func (e *Engine) runCheck(j *job, m domain.Monitor, prev domain.MonitorStatus, r
 			e.detectAnomaly(m, res.Latency, now)
 		}
 	}
+	j.persistMu.Unlock()
+	persistHeld = false
 
 	e.finishCheck(j, gen, next, newRetries, newSuccesses, current, fireAt, now)
 }
