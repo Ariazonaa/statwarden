@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -68,6 +69,58 @@ func TestChangingTheEmailKillsOutstandingResetTokens(t *testing.T) {
 	if used.Code != http.StatusBadRequest {
 		t.Fatalf("reset token after an address change = %d, want 400 — a link "+
 			"mailed to the OLD address still worked", used.Code)
+	}
+}
+
+// An administrator changing someone's address through PUT /users/{id} moves the
+// recovery channel just as surely as the owner doing it from the profile, so the
+// links mailed to the old address have to die there too.
+func TestAdminChangingAUsersEmailKillsOutstandingResetTokens(t *testing.T) {
+	h := newHarness(t)
+	admin := h.setupAdmin()
+	user := h.createUser(admin, "user@example.com", "user")
+
+	h.requestReset("user@example.com")
+	token := h.lastResetToken()
+
+	rec := h.requestWith(http.MethodPut, fmt.Sprintf("/api/v1/users/%d", user.userID), updateUserRequest{
+		Email: "moved@example.com", Role: "user",
+	}, admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin change email = %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	used := h.request(http.MethodPost, "/api/v1/auth/password-reset/confirm",
+		passwordResetConfirmRequest{Token: token, NewPassword: "attacker-chosen"})
+	if used.Code != http.StatusBadRequest {
+		t.Fatalf("reset token after an admin address change = %d, want 400 — a link "+
+			"mailed to the OLD address still worked", used.Code)
+	}
+}
+
+// An admin edit that leaves the address alone (a role change, a rename) is not
+// a change of recovery channel and must not cancel a reset the user is in the
+// middle of.
+func TestAdminEditKeepingTheEmailLeavesResetTokensAlone(t *testing.T) {
+	h := newHarness(t)
+	admin := h.setupAdmin()
+	user := h.createUser(admin, "user@example.com", "user")
+
+	h.requestReset("user@example.com")
+	token := h.lastResetToken()
+
+	rec := h.requestWith(http.MethodPut, fmt.Sprintf("/api/v1/users/%d", user.userID), updateUserRequest{
+		Email: "User@Example.com", Role: "viewer", DisplayName: "Renamed",
+	}, admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin edit = %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	used := h.request(http.MethodPost, "/api/v1/auth/password-reset/confirm",
+		passwordResetConfirmRequest{Token: token, NewPassword: "a-new-password"})
+	if used.Code != http.StatusNoContent {
+		t.Fatalf("reset after an edit that kept the address = %d, want 204, body %s",
+			used.Code, used.Body.String())
 	}
 }
 

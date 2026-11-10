@@ -133,8 +133,25 @@ func (s *server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	if !isActive {
 		_ = s.store.DeleteSessionsByUser(r.Context(), id, "")
 	}
+	// Audited before the reset-token step below: the update has been applied
+	// whether or not that step then fails, and the log has to say so.
 	p := principalFrom(r)
 	s.audit(r.Context(), &p.userID, "user.update", "user", &id, clientIP(r), nil)
+	// The same reasoning as handleChangeEmail: outstanding reset links went to
+	// the address that has just been replaced, and an administrator re-pointing
+	// an account is very often doing it because that mailbox is no longer the
+	// user's. Compared case-insensitively, as the address is looked up, so a
+	// recapitalisation is not mistaken for a move.
+	if !strings.EqualFold(existing.Email, u.Email) {
+		if err := s.store.InvalidatePasswordResets(r.Context(), id); err != nil {
+			s.logger.Error("could not invalidate reset tokens after an admin address change",
+				"user_id", id, "err", err)
+			writeProblemDetail(w, http.StatusInternalServerError,
+				"the address was changed but old password-reset links could not be invalidated; "+
+					"have the user change their password to invalidate them")
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, u)
 }
 
