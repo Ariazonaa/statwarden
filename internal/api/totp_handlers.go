@@ -73,6 +73,14 @@ func (s *server) handleTOTPVerify(w http.ResponseWriter, r *http.Request) {
 	if storeError(w, err) {
 		return
 	}
+	// Verify finishes an enrolment and nothing else. On an account that already
+	// has 2FA it would hand out a fresh set of backup codes — voiding the owner's
+	// printed ones — for one authenticator code and no password, which is the
+	// step-up handleRegenerateBackupCodes exists to demand.
+	if creds.TOTPEnabled {
+		writeProblemDetail(w, http.StatusConflict, "two-factor authentication is already enabled")
+		return
+	}
 	if creds.TOTPSecret == "" {
 		writeProblemDetail(w, http.StatusBadRequest, "start enrolment first")
 		return
