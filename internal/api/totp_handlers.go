@@ -211,8 +211,9 @@ func (s *server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	// An API key outlives every session and is not revoked by a password
-	// change, so minting one from a borrowed session is how a temporary
+	// An API key outlives every session, and only a password change or reset
+	// takes it away — which the owner has no reason to do for a key they never
+	// saw minted. Minting one from a borrowed session is how a temporary
 	// foothold becomes permanent.
 	if !s.reauthenticate(w, r, req.stepUp) {
 		return
