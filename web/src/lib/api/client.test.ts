@@ -18,8 +18,15 @@ import type { Monitor, Settings, Tag } from './types';
 // USE_MOCK is read once at module evaluation, so the stub has to be in place
 // before the import — hence the dynamic import rather than a static one.
 vi.stubEnv('VITE_USE_MOCK', 'false');
-const { api, ApiError, csrfToken, problemStatus, wsHeartbeatFromWire, wsStateChangeFromWire } =
-	await import('./client');
+const {
+	api,
+	ApiError,
+	csrfToken,
+	onUnauthorized,
+	problemStatus,
+	wsHeartbeatFromWire,
+	wsStateChangeFromWire
+} = await import('./client');
 
 interface Call {
 	method: string;
@@ -1292,6 +1299,34 @@ describe('transport', () => {
 		const err = await api.getMonitor('7').catch((e) => e);
 		expect(err).toBeInstanceOf(ApiError);
 		expect(problemStatus(err)).toBe(500);
+	});
+
+	it('reports a 401 on an ordinary request as the session ending', async () => {
+		const expired = vi.fn();
+		onUnauthorized(expired);
+		reply({ title: 'Unauthorized', status: 401, detail: 'authentication required' }, 401);
+		await api.listTags().catch(() => {});
+		expect(expired).toHaveBeenCalledTimes(1);
+
+		// Uploads take their own transport path and must report it too.
+		reply({ title: 'Unauthorized', status: 401 }, 401);
+		await api.uploadAvatar(new File(['x'], 'a.png', { type: 'image/png' })).catch(() => {});
+		expect(expired).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not treat a 401 from a login or a page password as an expired session', async () => {
+		// On these routes 401 is the answer to the request itself — wrong
+		// credentials, a missing second factor, a protected status page — and
+		// throwing the user out to /login for it would be absurd.
+		const expired = vi.fn();
+		onUnauthorized(expired);
+		reply({ title: 'Unauthorized', status: 401, detail: 'invalid credentials' }, 401);
+		await api.login({ username: 'ada', password: 'wrong' }).catch(() => {});
+		reply({ title: 'Unauthorized', status: 401, detail: 'password required' }, 401);
+		await api.publicStatusPage('public').catch(() => {});
+		reply({ title: 'Forbidden', status: 403 }, 403);
+		await api.listTags().catch(() => {});
+		expect(expired).not.toHaveBeenCalled();
 	});
 
 	it('reads a status off the mock backend’s plain problem-shaped throws', () => {

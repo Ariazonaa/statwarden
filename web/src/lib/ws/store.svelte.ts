@@ -10,7 +10,12 @@
  * so live updates work identically in development.
  */
 import { browser } from '$app/environment';
-import { USE_MOCK, wsHeartbeatFromWire, wsStateChangeFromWire } from '$lib/api/client';
+import {
+	USE_MOCK,
+	reportUnauthorized,
+	wsHeartbeatFromWire,
+	wsStateChangeFromWire
+} from '$lib/api/client';
 import { mockBus } from '$lib/api/mock';
 
 export type WsMessageType =
@@ -170,8 +175,22 @@ class WsStore {
 
 		sock.addEventListener('message', (ev) => {
 			try {
-				const env = JSON.parse(ev.data) as WsEnvelope;
+				const env = JSON.parse(ev.data) as WsEnvelope & { message?: string };
 				if (env.type === 'pong') return;
+				// The hub's two ways of saying the session is gone (internal/ws
+				// client.go): it re-checks the session on an open socket and closes
+				// with "session expired", and a reconnected — now anonymous — socket
+				// has every private subscription refused. Either way the dashboard
+				// would sit on frozen data with no error, so it is reported like a
+				// 401 from the REST API.
+				if (
+					env.type === 'error' &&
+					(env.message === 'session expired' ||
+						env.message === 'authentication required for this topic')
+				) {
+					reportUnauthorized();
+					return;
+				}
 				// The hub speaks the same snake_case wire dialect as the REST API,
 				// so frames are mapped here — subscribers must see the model shape
 				// whether they were fed by the socket or by the mock bus.
