@@ -197,3 +197,38 @@ describe('ws session loss', () => {
 		expect(expired).not.toHaveBeenCalled();
 	});
 });
+
+describe('ws reconnect after a manual disconnect', () => {
+	/** A socket whose close event arrives later, as a real one's does. */
+	function deferClose(sock: FakeWebSocket): () => void {
+		let fire: () => void = () => {};
+		const original = sock.close.bind(sock);
+		sock.close = () => {
+			sock.readyState = FakeWebSocket.CLOSED;
+			fire = original;
+		};
+		return () => fire();
+	}
+
+	it('keeps the new socket when the old one finishes closing late', () => {
+		ws.connect();
+		const first = FakeWebSocket.instances[0];
+		first.fireOpen();
+		const finishClose = deferClose(first);
+
+		// Leaving the app shell and coming straight back: the browser delivers
+		// the first socket's close event only after the second one exists.
+		ws.disconnect();
+		ws.connect();
+		const second = FakeWebSocket.instances[1];
+		second.fireOpen();
+		finishClose();
+
+		// The stale close must not drop the live socket or dial a third one.
+		vi.advanceTimersByTime(20000);
+		expect(FakeWebSocket.instances).toHaveLength(2);
+		expect(ws.online).toBe(true);
+		ws.subscribe('dashboard:all');
+		expect(second.sent.some((s) => s.includes('dashboard:all'))).toBe(true);
+	});
+});

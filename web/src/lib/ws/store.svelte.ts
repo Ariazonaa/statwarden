@@ -155,7 +155,14 @@ class WsStore {
 		const sock = new WebSocket(`${proto}://${location.host}/ws`);
 		this.#socket = sock;
 
+		// Every handler below first checks it still belongs to the CURRENT
+		// socket. A close event is delivered asynchronously, so disconnect()
+		// followed straight away by connect() — leaving the app shell and coming
+		// back — let the old socket's late close clear #socket (losing the new
+		// one), kill the new ping timer and schedule a reconnect that dialled a
+		// third socket.
 		sock.addEventListener('open', () => {
+			if (this.#socket !== sock) return;
 			// attempt > 0 means this open follows a drop: a reconnect, not the
 			// first connect. Re-subscribing restores the topic flow but not the
 			// frames missed while offline, so reconnect listeners reconcile via REST.
@@ -174,6 +181,7 @@ class WsStore {
 		});
 
 		sock.addEventListener('message', (ev) => {
+			if (this.#socket !== sock) return;
 			try {
 				const env = JSON.parse(ev.data) as WsEnvelope & { message?: string };
 				if (env.type === 'pong') return;
@@ -205,6 +213,7 @@ class WsStore {
 		});
 
 		sock.addEventListener('close', () => {
+			if (this.#socket !== sock) return;
 			clearInterval(this.#pingTimer);
 			this.#socket = undefined;
 			if (this.#manualClose) return;
