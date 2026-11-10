@@ -41,6 +41,36 @@ func TestVerifyPasswordRejectsGarbage(t *testing.T) {
 	}
 }
 
+// An account with no local password (single sign-on only) stores "". Refusing
+// that without deriving a key made a password login against such an account
+// answer measurably faster than a wrong password against any other, which sorts
+// SSO-only accounts from the rest without guessing anything. The refusal stays;
+// the work has to happen anyway.
+func TestVerifyPasswordDoesTheWorkForAnEmptyHash(t *testing.T) {
+	calls := 0
+	orig := kdf
+	kdf = func(password, salt []byte, time, memory uint32, threads uint8, keyLen uint32) []byte {
+		calls++
+		if memory != DefaultArgon2Params.Memory || time != DefaultArgon2Params.Iterations {
+			t.Errorf("derived with m=%d t=%d, want the default cost m=%d t=%d",
+				memory, time, DefaultArgon2Params.Memory, DefaultArgon2Params.Iterations)
+		}
+		return orig(password, salt, time, memory, threads, keyLen)
+	}
+	t.Cleanup(func() { kdf = orig })
+
+	ok, err := VerifyPassword("anything", "")
+	if ok {
+		t.Fatal("an empty stored hash verified")
+	}
+	if err != ErrInvalidHash {
+		t.Fatalf("err = %v, want ErrInvalidHash", err)
+	}
+	if calls != 1 {
+		t.Fatalf("argon2 ran %d times for an empty hash, want 1 — the refusal is a timing oracle", calls)
+	}
+}
+
 func TestTokenHashDeterministicAndUnique(t *testing.T) {
 	a, err := NewToken()
 	if err != nil {

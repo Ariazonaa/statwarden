@@ -40,6 +40,10 @@ var DefaultArgon2Params = Argon2Params{
 // ErrInvalidHash is returned when a stored hash cannot be parsed.
 var ErrInvalidHash = errors.New("auth: invalid password hash format")
 
+// kdf is argon2.IDKey behind a variable so a test can count how often the
+// KDF actually runs — the only observable a timing property has in a unit test.
+var kdf = argon2.IDKey
+
 // HashPassword hashes password with argon2id and encodes the result as a
 // self-describing PHC string ($argon2id$v=19$m=…,t=…,p=…$salt$hash), so
 // VerifyPassword can re-derive the parameters without external state.
@@ -62,12 +66,21 @@ func hashPasswordWith(password string, p Argon2Params) (string, error) {
 
 // VerifyPassword reports whether password matches the encoded argon2id hash in
 // constant time. A malformed hash returns ErrInvalidHash.
+//
+// A malformed hash still costs one full derivation at the default parameters.
+// The empty string is the normal stored value for an account that signs in
+// only through single sign-on, and answering it without the KDF made a
+// password attempt against such an account return in microseconds where a
+// wrong password elsewhere takes tens of milliseconds — an oracle for which
+// accounts are SSO-only.
 func VerifyPassword(password, encoded string) (bool, error) {
 	p, salt, want, err := decodeHash(encoded)
 	if err != nil {
+		d := DefaultArgon2Params
+		_ = kdf([]byte(password), make([]byte, d.SaltLength), d.Iterations, d.Memory, d.Parallelism, d.KeyLength)
 		return false, err
 	}
-	got := argon2.IDKey([]byte(password), salt, p.Iterations, p.Memory, p.Parallelism, p.KeyLength)
+	got := kdf([]byte(password), salt, p.Iterations, p.Memory, p.Parallelism, p.KeyLength)
 	if subtle.ConstantTimeCompare(got, want) == 1 {
 		return true, nil
 	}
