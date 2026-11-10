@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Ariazonaa/statwarden/internal/domain"
 	"github.com/Ariazonaa/statwarden/internal/monitor/registry"
@@ -130,7 +131,9 @@ func TestCheckHandshake(t *testing.T) {
 			defer srv.Close()
 
 			var ch Checker
+			start := time.Now()
 			res, err := ch.Check(context.Background(), mustCfg(t, Config{URL: wsURL(srv.URL, false)}))
+			elapsed := time.Since(start)
 			if err != nil {
 				t.Fatalf("Check() error = %v", err)
 			}
@@ -140,8 +143,12 @@ func TestCheckHandshake(t *testing.T) {
 			if tt.wantMsgSub != "" && !strings.Contains(res.Message, tt.wantMsgSub) {
 				t.Fatalf("message %q does not contain %q", res.Message, tt.wantMsgSub)
 			}
-			if res.Latency <= 0 {
-				t.Fatal("latency not measured")
+			// A loopback round trip can complete inside one tick of the monotonic clock
+			// (on Windows that tick is coarse), so a measured 0 is legitimate. What the
+			// assertion proves instead is that the latency is the check's own: never
+			// negative, and never longer than the call that produced it.
+			if res.Latency < 0 || res.Latency > elapsed {
+				t.Fatalf("latency = %s, want within [0, %s]", res.Latency, elapsed)
 			}
 		})
 	}

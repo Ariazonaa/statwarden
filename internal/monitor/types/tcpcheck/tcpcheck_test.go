@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/Ariazonaa/statwarden/internal/domain"
 	"github.com/Ariazonaa/statwarden/internal/monitor/registry"
@@ -66,15 +67,21 @@ func TestCheckOpenPort(t *testing.T) {
 
 	host, port := hostPort(t, ln.Addr().String())
 	var ch Checker
+	start := time.Now()
 	res, err := ch.Check(context.Background(), mustCfg(t, Config{Host: host, Port: port}))
+	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("Check() error = %v", err)
 	}
 	if res.Status != domain.StatusUp {
 		t.Fatalf("status = %s (%s), want up", res.Status, res.Message)
 	}
-	if res.Latency <= 0 {
-		t.Fatal("latency not measured")
+	// A loopback round trip can complete inside one tick of the monotonic clock
+	// (on Windows that tick is coarse), so a measured 0 is legitimate. What the
+	// assertion proves instead is that the latency is the check's own: never
+	// negative, and never longer than the call that produced it.
+	if res.Latency < 0 || res.Latency > elapsed {
+		t.Fatalf("latency = %s, want within [0, %s]", res.Latency, elapsed)
 	}
 }
 

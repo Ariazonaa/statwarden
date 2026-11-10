@@ -133,12 +133,18 @@ func TestCheckStatusCodes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := mustCfg(t, Config{URL: srv.URL + tt.path, AcceptedStatusCodes: tt.accepted})
+			start := time.Now()
 			res := runCheck(t, &ch, cfg)
+			elapsed := time.Since(start)
 			if res.Status != tt.wantStatus {
 				t.Fatalf("Check(%s) status = %s (%s), want %s", tt.path, res.Status, res.Message, tt.wantStatus)
 			}
-			if res.Latency <= 0 {
-				t.Fatal("latency not measured")
+			// A loopback round trip can complete inside one tick of the monotonic clock
+			// (on Windows that tick is coarse), so a measured 0 is legitimate. What the
+			// assertion proves instead is that the latency is the check's own: never
+			// negative, and never longer than the call that produced it.
+			if res.Latency < 0 || res.Latency > elapsed {
+				t.Fatalf("latency = %s, want within [0, %s]", res.Latency, elapsed)
 			}
 		})
 	}
