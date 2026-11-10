@@ -114,6 +114,9 @@ function readStoredTimezone(): string | null {
 const initialLocale = detectLocale();
 
 let current = $state<Locale>(initialLocale);
+// The visitor's own language (saved, or detected from the browser), as opposed
+// to a view-only override. Plain, not a rune: nothing renders it directly.
+let preferred: Locale = initialLocale;
 let timezone = $state<string | null>(readStoredTimezone());
 
 function applyDocumentLang(locale: Locale): void {
@@ -137,17 +140,29 @@ export const i18n = {
 	get locales(): LocaleMeta[] {
 		return LOCALES;
 	},
-	setLocale(next: Locale): void {
-		if (!isLocale(next) || next === current) return;
+	/**
+	 * Switches the UI language. `persist: false` applies it to the current view
+	 * only: a public status page renders in the language its owner configured,
+	 * and that must not overwrite the visitor's own saved choice — an operator
+	 * previewing a German page would otherwise find the whole dashboard German.
+	 */
+	setLocale(next: Locale, { persist = true }: { persist?: boolean } = {}): void {
+		if (!isLocale(next)) return;
+		if (persist) preferred = next;
+		if (next === current) return;
 		current = next;
 		applyDocumentLang(next);
-		if (browser) {
+		if (browser && persist) {
 			try {
 				localStorage.setItem(LOCALE_KEY, next);
 			} catch {
 				/* ignore */
 			}
 		}
+	},
+	/** Drops a view-only locale and returns to the visitor's own. */
+	resetLocale(): void {
+		this.setLocale(preferred, { persist: false });
 	},
 	/** User-selected IANA timezone, or null to follow the browser. */
 	get timezone(): string | null {

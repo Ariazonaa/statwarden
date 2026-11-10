@@ -58,8 +58,9 @@
 			notFound = false;
 			loadError = false;
 			// The page carries its own locale; honour it here too, or the archive
-			// of a German page would render its month names in English.
-			if (res.locale) i18n.setLocale(res.locale as Locale);
+			// of a German page would render its month names in English. View-only,
+			// like the status page itself: the visitor's saved choice stays.
+			if (res.locale) i18n.setLocale(res.locale as Locale, { persist: false });
 		} catch (e) {
 			if (seq !== loadSeq) return;
 			const status = problemStatus(e);
@@ -87,7 +88,11 @@
 		}
 	}
 
-	onMount(() => void load());
+	onMount(() => {
+		void load();
+		// Back to the visitor's own locale on the way out (see the status page).
+		return () => i18n.resetLocale();
+	});
 
 	async function submitPassword() {
 		if (!passwordValue) return;
