@@ -105,7 +105,9 @@ func TestCheckValidCertificate(t *testing.T) {
 	host, port, pool := newTLSServer(t, time.Now().Add(60*24*time.Hour))
 	ch := Checker{rootCAs: pool}
 
+	start := time.Now()
 	res, err := ch.Check(context.Background(), mustCfg(t, Config{Host: host, Port: port, ServerName: "localhost"}))
+	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("Check() error = %v", err)
 	}
@@ -118,8 +120,12 @@ func TestCheckValidCertificate(t *testing.T) {
 	if !strings.Contains(res.Message, "remaining") {
 		t.Fatalf("message %q should mention remaining days", res.Message)
 	}
-	if res.Latency <= 0 {
-		t.Fatal("latency not measured")
+	// A loopback round trip can complete inside one tick of the monotonic clock
+	// (on Windows that tick is coarse), so a measured 0 is legitimate. What the
+	// assertion proves instead is that the latency is the check's own: never
+	// negative, and never longer than the call that produced it.
+	if res.Latency < 0 || res.Latency > elapsed {
+		t.Fatalf("latency = %s, want within [0, %s]", res.Latency, elapsed)
 	}
 }
 
