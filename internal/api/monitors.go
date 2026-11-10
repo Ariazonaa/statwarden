@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -486,8 +487,56 @@ func (s *server) validateMonitor(req monitorRequest) error {
 	if len(cfg) == 0 {
 		cfg = json.RawMessage(`{}`)
 	}
+	if err := s.canonicalConfigKeys(req.Type, cfg); err != nil {
+		return validationError("invalid config: " + err.Error())
+	}
 	if err := checker.Validate(cfg); err != nil {
 		return validationError("invalid config: " + err.Error())
+	}
+	return nil
+}
+
+// canonicalConfigKeys refuses a config whose top-level keys are ambiguous to
+// the checker that will decode it.
+//
+// The API reasons about a config by exact key — "host" is a target, "password"
+// is a secret — while the checkers decode it with encoding/json, which matches
+// struct fields case-insensitively and under Unicode simple folding: "Host"
+// and "hoſt" (U+017F) both land in the field tagged "host". Every key the API
+// did not recognise but the decoder did is a way around a rule: a folded twin
+// of a target key moved a monitor while the masked-credential guard saw the
+// target unchanged, and a secret under a folded key was stored and read back
+// unmasked.
+//
+// Two rules, both on the top level only (nested maps such as HTTP headers are
+// data, not field names):
+//   - a key that folds to a target or secret field must be spelled exactly;
+//   - no two keys may fold to each other, which covers the fields a checker
+//     names itself and this package has never heard of.
+func (s *server) canonicalConfigKeys(typ string, cfg json.RawMessage) error {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(cfg, &m); err != nil {
+		// Not an object: the checker's own Validate reports that better.
+		return nil
+	}
+	known := append(append([]string{}, targetFields...), s.monitorSecretFields(typ)...)
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	// Sorted so the same request always names the same key in its error.
+	sort.Strings(keys)
+	for i, k := range keys {
+		for _, name := range known {
+			if k != name && strings.EqualFold(k, name) {
+				return fmt.Errorf("key %q must be written as %q", k, name)
+			}
+		}
+		for _, other := range keys[i+1:] {
+			if strings.EqualFold(k, other) {
+				return fmt.Errorf("keys %q and %q name the same field", k, other)
+			}
+		}
 	}
 	return nil
 }
