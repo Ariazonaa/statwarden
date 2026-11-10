@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -113,6 +114,14 @@ func maskSecretSetting(st Setting) Setting {
 // minWebhookSecretLen..maxWebhookSecretLen printable, non-space characters.
 func validateWebhookSecret(raw json.RawMessage) error {
 	var v string
+	// null unmarshals into a string without error and reads as "", yet the write
+	// path only recognises the literal `""` as "signing off": null was sealed and
+	// stored, the list reported a key as configured, and the feed went out
+	// unsigned. Refused rather than normalised, so the two spellings of "off"
+	// cannot drift again.
+	if string(bytes.TrimSpace(raw)) == "null" {
+		return fmt.Errorf("must be a string")
+	}
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return fmt.Errorf("must be a string")
 	}
