@@ -1585,3 +1585,85 @@ func TestStaleTimerCallbackDoesNotStartASecondChain(t *testing.T) {
 		t.Fatalf("%d checks ran, want 1", n)
 	}
 }
+
+// hookStore is a MemStore whose writes can be intercepted.
+type hookStore struct {
+	*engine.MemStore
+	onHeartbeat func()
+	statusErr   func(domain.MonitorStatus) error
+}
+
+func (s *hookStore) SaveHeartbeat(ctx context.Context, hb domain.Heartbeat) error {
+	if s.onHeartbeat != nil {
+		s.onHeartbeat()
+	}
+	return s.MemStore.SaveHeartbeat(ctx, hb)
+}
+
+func (s *hookStore) UpdateMonitorStatus(ctx context.Context, id int64, st domain.MonitorStatus) error {
+	if s.statusErr != nil {
+		if err := s.statusErr(st); err != nil {
+			return err
+		}
+	}
+	return s.MemStore.UpdateMonitorStatus(ctx, id, st)
+}
+
+// TestPauseDuringPersistIsNotOverwritten: the generation check that discards a
+// stale result ran BEFORE the result was written. A Pause landing between the
+// two wrote "paused", and the check's status write then replaced it with
+// "down" — a paused monitor shown as an outage until someone resumed it.
+func TestPauseDuringPersistIsNotOverwritten(t *testing.T) {
+	reg := registry.New()
+	chk := &scriptChecker{typ: "fake", fallback: down()}
+	reg.Register(chk)
+
+	inPersist := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	store := &hookStore{MemStore: engine.NewMemStore()}
+	store.onHeartbeat = func() {
+		once.Do(func() {
+			close(inPersist)
+			<-release
+		})
+	}
+	var writes atomic.Int32
+	store.statusErr = func(domain.MonitorStatus) error {
+		writes.Add(1)
+		return nil
+	}
+	e, _, _ := newEngine(t, engine.Options{Registry: reg, Store: store})
+	m := testMonitor(1, "fake")
+	m.Status = domain.StatusPending
+	if err := e.Upsert(m); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CheckNow(1); err != nil {
+		t.Fatal(err)
+	}
+	<-inPersist
+
+	paused := make(chan struct{})
+	go func() {
+		_ = e.Pause(1)
+		close(paused)
+	}()
+	// Give an unsynchronised Pause the chance to finish first, which is the
+	// interleaving that lost the paused status.
+	select {
+	case <-paused:
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	<-paused
+
+	// Both writers are done: the check's transition to DOWN and the Pause.
+	waitFor(t, "status writes", func() bool { return writes.Load() == 2 })
+	if st, _ := store.Status(1); st != domain.StatusPaused {
+		t.Fatalf("stored status = %s, want paused", st)
+	}
+	if st, _ := e.StatusOf(1); st != domain.StatusPaused {
+		t.Fatalf("engine status = %s, want paused", st)
+	}
+}
