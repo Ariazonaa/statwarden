@@ -63,8 +63,14 @@ func (s *server) handleRequestPasswordReset(w http.ResponseWriter, r *http.Reque
 
 	// Deliberately unconditional and deliberately ignoring the error: every
 	// branch below converges on the same response.
+	//
+	// From here on the account's STORED address is the one that counts, for the
+	// per-address budget and for the recipient. The lookup matches
+	// case-insensitively, so the typed string is only something that resembled
+	// the stored one under the database's lower(); mailing a credential to it
+	// would trust that comparison further than it was ever meant to go.
 	creds, err := s.store.GetCredentialsByEmail(r.Context(), email)
-	if err == nil && creds.IsActive && s.resetLimiter.allow("reset-account:"+strings.ToLower(email)) {
+	if err == nil && creds.IsActive && s.resetLimiter.allow("reset-account:"+strings.ToLower(creds.Email)) {
 		// Issued off the request path.
 		//
 		// The lookup above is unconditional, but issuing was not: minting a
@@ -81,7 +87,7 @@ func (s *server) handleRequestPasswordReset(w http.ResponseWriter, r *http.Reque
 		ctx := context.WithoutCancel(r.Context())
 		s.resetInflight.Add(1)
 		safego.Go(s.logger, "password reset issue", func() {
-			s.issuePasswordResetAsync(ctx, r, creds.ID, email)
+			s.issuePasswordResetAsync(ctx, r, creds.ID, creds.Email)
 		})
 	}
 	writeJSON(w, http.StatusAccepted, resetAcceptedBody())

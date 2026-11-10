@@ -28,6 +28,29 @@ func enableTOTPDirect(t *testing.T, h *harness, userID int64) (string, []string)
 	return secret, plain
 }
 
+// The reset mail goes to the address the account HOLDS, not to the spelling the
+// caller typed. The lookup is case-insensitive, so the typed string can match a
+// stored address without being it — and anything that compares the two more
+// loosely than byte-for-byte (Unicode case folding in the database's lower(),
+// a mail server that treats them differently) turns "mail the typed address"
+// into "mail an address that merely resembles the account's".
+func TestPasswordResetMailsTheStoredAddress(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin()
+
+	h.requestReset("ADMIN@Example.COM")
+
+	if got := h.mails.count(); got != 1 {
+		t.Fatalf("sent %d mails, want 1", got)
+	}
+	h.mails.mu.Lock()
+	to := h.mails.sent[0].to
+	h.mails.mu.Unlock()
+	if to != "admin@example.com" {
+		t.Fatalf("reset mail went to %q, want the stored address admin@example.com", to)
+	}
+}
+
 // /me/totp/verify is the second half of ENROLMENT. Once 2FA is on, a valid code
 // there used to mint a fresh set of backup codes and silently void the owner's
 // printed ones — with a session and one authenticator code, no password. That is
