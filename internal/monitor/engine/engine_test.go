@@ -1667,3 +1667,60 @@ func TestPauseDuringPersistIsNotOverwritten(t *testing.T) {
 		t.Fatalf("engine status = %s, want paused", st)
 	}
 }
+
+// ctxChecker blocks until its context ends and fails with the context's error,
+// the way every real checker reports an aborted dial.
+type ctxChecker struct {
+	typ     string
+	started chan struct{}
+}
+
+func (c *ctxChecker) Type() string                   { return c.typ }
+func (c *ctxChecker) Validate(json.RawMessage) error { return nil }
+func (c *ctxChecker) Check(ctx context.Context, _ json.RawMessage) (domain.CheckResult, error) {
+	close(c.started)
+	<-ctx.Done()
+	return domain.CheckResult{}, ctx.Err()
+}
+
+// TestShutdownDoesNotRecordAbortedChecksAsDown: Stop cancels checks that are
+// still running when its deadline passes. Those came back "context canceled",
+// were recorded as a DOWN heartbeat, and the transition alerted — an outage
+// reported for every slow target on every restart.
+func TestShutdownDoesNotRecordAbortedChecksAsDown(t *testing.T) {
+	reg := registry.New()
+	chk := &ctxChecker{typ: "fake", started: make(chan struct{})}
+	reg.Register(chk)
+
+	events := &eventRecorder{}
+	e, store, _ := newEngine(t, engine.Options{Registry: reg, OnEvent: events.record})
+	if err := e.Upsert(testMonitor(1, "fake")); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CheckNow(1); err != nil {
+		t.Fatal(err)
+	}
+	<-chk.started
+
+	short, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := e.Stop(short); err == nil {
+		t.Fatal("Stop with a hanging check returned nil, want its deadline error")
+	}
+	// A second Stop waits for the aborted check to wind down completely.
+	drain, cancelDrain := context.WithTimeout(context.Background(), testutil.Wait(2*time.Second))
+	defer cancelDrain()
+	if err := e.Stop(drain); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+
+	if hbs := store.Heartbeats(); len(hbs) != 0 {
+		t.Fatalf("aborted check recorded %d heartbeats (%+v), want none", len(hbs), hbs)
+	}
+	if evs := events.all(); len(evs) != 0 {
+		t.Fatalf("aborted check emitted %+v, want nothing", evs)
+	}
+	if _, ok := store.Status(1); ok {
+		t.Fatal("aborted check wrote a monitor status")
+	}
+}
