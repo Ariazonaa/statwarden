@@ -306,6 +306,11 @@ func TestLoadInvalidValues(t *testing.T) {
 		{"port not a number", "PORT", "http"},
 		{"port out of range", "PORT", "70000"},
 		{"port zero", "PORT", "0"},
+		// An address, not a host:port and not a name: the port is PORT's, and a
+		// name that resolves to several addresses would bind only the first.
+		{"listen addr with a port", "LISTEN_ADDR", "127.0.0.1:3001"},
+		{"listen addr as a hostname", "LISTEN_ADDR", "localhost"},
+		{"listen addr not an address", "LISTEN_ADDR", "not-an-ip"},
 		{"bad log level", "LOG_LEVEL", "verbose"},
 		{"bad log format", "LOG_FORMAT", "xml"},
 		{"bad locale", "DEFAULT_LOCALE", "fr"},
@@ -519,6 +524,36 @@ func TestEffectiveWorkerPoolSize(t *testing.T) {
 func TestAddr(t *testing.T) {
 	if got := (&Config{Port: 3999}).Addr(); got != ":3999" {
 		t.Errorf("Addr() = %q, want :3999", got)
+	}
+}
+
+// TestListenAddr pins the bind-address knob. Unset must keep the historical
+// ":PORT" (every interface), because changing that silently would take every
+// existing deployment off the network; set, it binds exactly that address, and
+// an IPv6 literal must come out bracketed or net.Listen rejects it.
+func TestListenAddr(t *testing.T) {
+	cases := []struct {
+		val  string
+		want string
+	}{
+		{"", ":3001"},
+		{"127.0.0.1", "127.0.0.1:3001"},
+		{"::1", "[::1]:3001"},
+		{" 10.0.0.5 ", "10.0.0.5:3001"},
+		{"0.0.0.0", "0.0.0.0:3001"},
+	}
+	for _, tc := range cases {
+		env := required()
+		if tc.val != "" {
+			env["LISTEN_ADDR"] = tc.val
+		}
+		cfg, err := Load(lookupMap(env))
+		if err != nil {
+			t.Fatalf("LISTEN_ADDR=%q: Load() error = %v", tc.val, err)
+		}
+		if got := cfg.Addr(); got != tc.want {
+			t.Errorf("LISTEN_ADDR=%q: Addr() = %q, want %q", tc.val, got, tc.want)
+		}
 	}
 }
 

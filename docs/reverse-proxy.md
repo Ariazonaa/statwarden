@@ -5,7 +5,8 @@ plain-HTTP port** (`:3001` by default). It does **not** terminate TLS itself —
 run it behind a reverse proxy that terminates HTTPS and forwards to the app.
 
 Everything is one origin, so proxying is simple: forward all paths to
-`127.0.0.1:3001`. The one thing you must not forget is the **WebSocket upgrade**
+`127.0.0.1:3001` (and bind the app to loopback so the proxy is the only way in —
+see [Binding to loopback](#binding-to-loopback)). The one thing you must not forget is the **WebSocket upgrade**
 on `/ws` (live dashboard, monitor detail and public status-page updates). The
 samples below all cover it.
 
@@ -223,10 +224,35 @@ peer, and the only value nobody can forge.
 - **Never list a range that isn't a proxy you control.** Trusting `0.0.0.0/0`
   hands every client a self-declared IP: fresh rate-limit and lockout buckets
   on demand, and a brute-force attack that never trips a throttle.
-- **Bind Statwarden so the proxy is the only reachable path.** Keep it on
-  `127.0.0.1` or an internal Docker network. If clients can also reach it
-  directly, they connect from outside the trusted range and are handled safely,
-  but they bypass anything the proxy enforces (TLS, WAF, its own rate limits).
+- **Bind Statwarden so the proxy is the only reachable path.** If clients can
+  also reach it directly, they connect from outside the trusted range and are
+  handled safely, but they bypass anything the proxy enforces (TLS, WAF, its
+  own rate limits). By default it listens on every interface, so this takes one
+  setting (see "Binding to loopback" below).
+
+### Binding to loopback
+
+**Bare metal / systemd, proxy on the same host:** set the listen address in the
+environment file. The port still comes from `PORT`.
+
+```bash
+LISTEN_ADDR=127.0.0.1   # or ::1 for IPv6 loopback
+```
+
+**Docker Compose:** leave `LISTEN_ADDR` unset. Inside the container the app has
+to listen on the container's own interface, or neither the published port nor
+the image's healthcheck can reach it. Restrict the *published* port instead, by
+prefixing the host side of the mapping in `docker-compose.yml` with the
+address to publish on:
+
+```yaml
+    ports:
+      - "127.0.0.1:${PORT:-3001}:3001"
+```
+
+A proxy that runs as another container on the same Compose network needs no
+published port at all — it reaches the app as `app:3001`, and you can drop the
+`ports:` block entirely.
 - **Leave it empty if Statwarden is directly internet-facing.** That is the correct
   configuration, not a missing one.
 

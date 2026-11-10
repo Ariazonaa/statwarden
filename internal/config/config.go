@@ -13,6 +13,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"net/mail"
 	"net/netip"
 	"net/url"
@@ -126,7 +127,11 @@ type Config struct {
 	EncryptionKey string
 
 	// Server.
-	Port          int
+	Port int
+	// ListenAddr is the IP address the HTTP server binds to, or "" for every
+	// interface (the historical behaviour). It is an address literal only; the
+	// port always comes from Port.
+	ListenAddr    string
 	PublicBaseURL string
 	// AllowedOrigins are extra browser origins (beyond PublicBaseURL) permitted
 	// to open a WebSocket, for a deployment reached under more than one hostname.
@@ -383,6 +388,19 @@ func Load(lookup func(key string) (string, bool)) (*Config, error) {
 			addProblem("PORT: %q must be an integer between 1 and 65535", raw)
 		} else {
 			cfg.Port = n
+		}
+	}
+
+	// An IP literal and nothing else. A host name is refused because net.Listen
+	// binds only the FIRST address it resolves to, so "localhost" would quietly
+	// mean 127.0.0.1 on one machine and ::1 on the next; a host:port is refused
+	// because the port is PORT's, and two places to set it is one too many.
+	if raw, ok := env("LISTEN_ADDR"); ok {
+		a, err := netip.ParseAddr(raw)
+		if err != nil || a.Zone() != "" {
+			addProblem("LISTEN_ADDR: %q must be an IP address such as 127.0.0.1 or ::1 (the port comes from PORT)", raw)
+		} else {
+			cfg.ListenAddr = a.String()
 		}
 	}
 
@@ -728,9 +746,10 @@ func loadAnomaly(
 	return c
 }
 
-// Addr returns the listen address derived from Port, e.g. ":3001".
+// Addr returns the listen address derived from ListenAddr and Port, e.g.
+// ":3001" (every interface), "127.0.0.1:3001" or "[::1]:3001".
 func (c *Config) Addr() string {
-	return fmt.Sprintf(":%d", c.Port)
+	return net.JoinHostPort(c.ListenAddr, strconv.Itoa(c.Port))
 }
 
 // MinAutoWorkerPoolSize floors the automatic sizing. Checks are I/O-bound and

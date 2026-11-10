@@ -24,6 +24,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # Published on every host interface. Behind a reverse proxy on the same
+    # host, publish on loopback only: "127.0.0.1:${PORT:-3001}:3001". LISTEN_ADDR
+    # is deliberately NOT passed into the container: binding the app to the
+    # container's loopback would make it unreachable through this mapping and
+    # fail the image's healthcheck. See docs/reverse-proxy.md.
     ports:
       - "${PORT:-3001}:3001"
     environment:
