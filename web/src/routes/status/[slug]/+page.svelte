@@ -139,13 +139,18 @@
 		return () => {
 			off();
 			unsub();
+			// The page's language belongs to this view, not to the visitor: put
+			// their own back on the way out, so an operator returning to the
+			// dashboard in the same tab does not find it in the page's language.
+			i18n.resetLocale();
 		};
 	});
 
 	// Honor the page's configured language (falls back to the visitor's locale).
+	// For this view only: it must not overwrite the visitor's saved choice.
 	$effect(() => {
 		const loc = data?.locale;
-		if (loc === 'en' || loc === 'de') i18n.setLocale(loc as Locale);
+		if (loc === 'en' || loc === 'de') i18n.setLocale(loc as Locale, { persist: false });
 	});
 
 	// Reflect indexing preference in the document (SPA, so set at runtime).
