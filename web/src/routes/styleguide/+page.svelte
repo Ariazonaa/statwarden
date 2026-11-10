@@ -4,6 +4,7 @@
 	import {
 		AppBackground,
 		Avatar,
+		BrandMark,
 		Checkbox,
 		ColorField,
 		CommandPalette,
@@ -473,6 +474,14 @@
 					<Tooltip text="Checks run every 60 s from this instance.">
 						<PillButton variant="secondary" size="sm">Hover or focus me</PillButton>
 					</Tooltip>
+				</div>
+			</GlassCard>
+
+			<GlassCard title="BrandMark">
+				<div class="row center">
+					<BrandMark size="1.25rem" />
+					<BrandMark size="2.25rem" />
+					<BrandMark size="3.75rem" label="Statwarden" />
 				</div>
 			</GlassCard>
 

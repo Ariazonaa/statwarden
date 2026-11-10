@@ -30,6 +30,7 @@
 		formatNumber
 	} from '$lib/i18n';
 	import {
+		BrandMark,
 		Checkbox,
 		GlassCard,
 		Modal,
@@ -676,18 +677,7 @@
 			</GlassCard>
 		{:else if current === 'about'}
 			<div class="about">
-				<span class="about-mark" aria-hidden="true">
-					<svg viewBox="0 0 64 64"
-						><path
-							d="M32 7 50 14v15c0 12-7.7 21.6-18 26-10.3-4.4-18-14-18-26V14L32 7Zm-12 25h7l4-8 6 16 4-8h3"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="4.5"
-							stroke-linecap="round"
-							stroke-linejoin="round"
-						/></svg
-					>
-				</span>
+				<span class="about-mark" aria-hidden="true"> <BrandMark size="3.75rem" /></span>
 				<strong class="about-name">Statwarden</strong>
 				{#if version}
 					<dl class="about-meta">
@@ -806,10 +796,6 @@
 		border-radius: var(--radius-squircle-md);
 		background: var(--color-accent-tint);
 		border: 1px solid var(--hairline-strong);
-	}
-	.about-mark svg {
-		width: 3.75rem;
-		height: 3.75rem;
 	}
 	.about-name {
 		font-size: var(--text-title-1);
