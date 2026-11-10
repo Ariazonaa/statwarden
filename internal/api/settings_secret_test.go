@@ -85,6 +85,28 @@ func TestWebhookSecretsAreNeverReadBack(t *testing.T) {
 	}
 }
 
+// JSON null is not a secret. It decodes to "" and so passed the validator, but
+// it is not the literal `""` that means "signing off", so it was sealed, stored
+// and listed as a configured key while the feed went out unsigned.
+func TestNullWebhookSecretIsRejected(t *testing.T) {
+	h := newHarness(t)
+	admin := h.setupAdmin()
+	for _, key := range []string{SettingAuditWebhookSecret, SettingOutboundWebhookSecret} {
+		rec := h.requestRaw(http.MethodPut, "/api/v1/settings/"+key, "null", admin)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("saving null as %s = %d, want 400; body %s", key, rec.Code, rec.Body.String())
+		}
+	}
+	rec := h.requestWith(http.MethodGet, "/api/v1/settings", nil, admin)
+	var rows []Setting
+	mustJSON(t, rec, &rows)
+	for _, r := range rows {
+		if isSecretSetting(r.Key) && string(r.Value) == "true" {
+			t.Fatalf("%s reads back as set after a rejected null write", r.Key)
+		}
+	}
+}
+
 func TestSavingAWeakWebhookSecretIsRejected(t *testing.T) {
 	h := newHarness(t)
 	admin := h.setupAdmin()
