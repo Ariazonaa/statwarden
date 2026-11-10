@@ -43,7 +43,13 @@
 		<MonitorList />
 	</aside>
 	<div class="pane">
-		{@render children()}
+		<!-- Keyed on the monitor id. SvelteKit reuses a page component when only
+		     its parameter changes, and the detail and edit pages load in onMount:
+		     without a fresh instance, /monitors/A → /monitors/B kept A on screen
+		     while every action on the page already addressed B. -->
+		{#key page.params.id}
+			{@render children()}
+		{/key}
 	</div>
 </div>
 
