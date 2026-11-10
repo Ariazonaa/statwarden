@@ -36,7 +36,7 @@ jobs:
           echo "commit=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
           echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
 
       # Scan a single-architecture build first. The push below happens only if
@@ -67,7 +67,7 @@ jobs:
       - name: Tags
         id: tags
         if: github.event_name != 'pull_request'
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
           tags: |
@@ -76,7 +76,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         if: github.event_name != 'pull_request'
         with:
           registry: ghcr.io
