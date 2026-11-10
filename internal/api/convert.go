@@ -83,10 +83,13 @@ func (s *server) redactMonitorConfig(typ string, cfg json.RawMessage) json.RawMe
 	// blanking it would leave the reader with no idea what is being checked — but
 	// it can still carry a password inline. The write path refuses new ones; this
 	// covers the rows written before it did. Unconditional on type, because
-	// "url" means the same thing in every checker that has one.
-	if masked, ok := maskConfigURL(m["url"]); ok {
-		m["url"] = masked
-		changed = true
+	// "url" means the same thing in every checker that has one. broker (MQTT) is
+	// the same kind of value, and its client does log in with inline userinfo.
+	for _, f := range maskedURLFields {
+		if masked, ok := maskConfigURL(m[f]); ok {
+			m[f] = masked
+			changed = true
+		}
 	}
 	if !changed {
 		return cfg
@@ -98,7 +101,33 @@ func (s *server) redactMonitorConfig(typ string, cfg json.RawMessage) json.RawMe
 	return out
 }
 
-// maskConfigURL masks the password in a config's "url" value, reporting whether
+// maskedURLFields are the config keys holding a URL whose inline password is
+// masked on read (see maskURLPassword) and restored on write when the client
+// sends the masked form back unchanged (see restoreMaskedURLs).
+var maskedURLFields = []string{"url", "broker"}
+
+// restoreMaskedURLs puts the stored value back for every masked URL field the
+// write left exactly as the read showed it, reporting whether it changed nm.
+//
+// Without it an edit form that saves what it loaded stores the placeholder as
+// the password. Only the exact masked form is restored, so any change to the
+// URL, including its host or username, is taken as written.
+func restoreMaskedURLs(nm, om map[string]json.RawMessage) bool {
+	changed := false
+	for _, f := range maskedURLFields {
+		var stored, sent string
+		if json.Unmarshal(om[f], &stored) != nil || json.Unmarshal(nm[f], &sent) != nil {
+			continue
+		}
+		if masked := maskURLPassword(stored); masked != stored && sent == masked {
+			nm[f] = om[f]
+			changed = true
+		}
+	}
+	return changed
+}
+
+// maskConfigURL masks the password in a config's URL value, reporting whether
 // anything changed. A missing, non-string or credential-free url is left alone,
 // so a config that never carried one is returned byte-for-byte.
 func maskConfigURL(raw json.RawMessage) (json.RawMessage, bool) {
@@ -193,8 +222,7 @@ func movedTarget(oldCfg, newCfg map[string]json.RawMessage) bool {
 // It returns ok=false when the write submits a placeholder AND moves the
 // target, which the caller must refuse rather than quietly accept.
 func (s *server) keepRedactedSecrets(typ string, newCfg, oldCfg json.RawMessage) (json.RawMessage, bool) {
-	fields := s.monitorSecretFields(typ)
-	if len(fields) == 0 || len(newCfg) == 0 {
+	if len(newCfg) == 0 {
 		return newCfg, true
 	}
 	var nm map[string]json.RawMessage
@@ -203,9 +231,11 @@ func (s *server) keepRedactedSecrets(typ string, newCfg, oldCfg json.RawMessage)
 	}
 	var om map[string]json.RawMessage
 	_ = json.Unmarshal(oldCfg, &om)
+	// Before movedTarget: a masked url or broker sent back unchanged is the
+	// stored target, not a new one.
+	changed := restoreMaskedURLs(nm, om)
 	moved := movedTarget(om, nm)
-	changed := false
-	for _, f := range fields {
+	for _, f := range s.monitorSecretFields(typ) {
 		raw, ok := nm[f]
 		if !ok || !isPlaceholder(raw) {
 			continue
@@ -235,11 +265,11 @@ func (s *server) keepRedactedSecrets(typ string, newCfg, oldCfg json.RawMessage)
 	return out, true
 }
 
-// placeholderFields lists the secret fields a config submits as the redaction
-// sentinel. Empty when there are none.
+// placeholderFields lists the fields a config submits as the redaction
+// sentinel: secret fields holding it outright, and URL fields whose inline
+// password is it. Empty when there are none.
 func (s *server) placeholderFields(typ string, cfg json.RawMessage) []string {
-	fields := s.monitorSecretFields(typ)
-	if len(fields) == 0 || len(cfg) == 0 {
+	if len(cfg) == 0 {
 		return nil
 	}
 	var m map[string]json.RawMessage
@@ -247,12 +277,63 @@ func (s *server) placeholderFields(typ string, cfg json.RawMessage) []string {
 		return nil
 	}
 	var out []string
-	for _, f := range fields {
+	for _, f := range s.monitorSecretFields(typ) {
 		if raw, ok := m[f]; ok && isPlaceholder(raw) {
 			out = append(out, f)
 		}
 	}
+	for _, f := range maskedURLFields {
+		if maskedURL(m[f]) != nil {
+			out = append(out, f)
+		}
+	}
 	return out
+}
+
+// maskedURL parses raw as a URL string whose inline password is the redaction
+// placeholder, or returns nil when it is anything else.
+func maskedURL(raw json.RawMessage) *url.URL {
+	var v string
+	if json.Unmarshal(raw, &v) != nil {
+		return nil
+	}
+	u, err := url.Parse(v)
+	if err != nil || u.User == nil {
+		return nil
+	}
+	if pw, ok := u.User.Password(); !ok || pw != monitorSecretPlaceholder {
+		return nil
+	}
+	return u
+}
+
+// dropMaskedURLPasswords removes a placeholder password from the masked URL
+// fields, returning the fields it changed. It is the import's counterpart of
+// dropping a placeholder secret field: there is no stored value to restore, and
+// keeping the mask would make it the password.
+func dropMaskedURLPasswords(cfg json.RawMessage) (json.RawMessage, []string) {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(cfg, &m) != nil {
+		return cfg, nil
+	}
+	var dropped []string
+	for _, f := range maskedURLFields {
+		u := maskedURL(m[f])
+		if u == nil {
+			continue
+		}
+		u.User = url.User(u.User.Username())
+		m[f], _ = json.Marshal(u.String())
+		dropped = append(dropped, f)
+	}
+	if len(dropped) == 0 {
+		return cfg, nil
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return cfg, nil
+	}
+	return out, dropped
 }
 
 // isPlaceholder reports whether a raw JSON value is the redaction sentinel
