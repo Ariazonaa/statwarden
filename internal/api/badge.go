@@ -12,11 +12,25 @@ import (
 	"github.com/Ariazonaa/statwarden/internal/report"
 )
 
-// writeSVG writes an SVG badge with short caching (badges change slowly and are
-// embedded widely).
+// Badge cache policies. Badges change slowly and are embedded widely, so an
+// open one may sit in a shared cache for a minute. A badge that was only
+// answered because the request carried a page password or unlock cookie must
+// not: a CDN or corporate proxy would hand it to everyone behind it.
+const (
+	badgeCachePublic  = "max-age=60, public"
+	badgeCachePrivate = "max-age=60, private"
+)
+
+// writeSVG writes an SVG badge that anyone may receive, with short shared
+// caching.
 func writeSVG(w http.ResponseWriter, svg string) {
+	writeSVGCached(w, svg, badgeCachePublic)
+}
+
+// writeSVGCached writes an SVG badge under the given Cache-Control policy.
+func writeSVGCached(w http.ResponseWriter, svg, cacheControl string) {
 	w.Header().Set("Content-Type", "image/svg+xml; charset=utf-8")
-	w.Header().Set("Cache-Control", "max-age=60, public")
+	w.Header().Set("Cache-Control", cacheControl)
 	// The monitor name reaches this string, and SVG served under image/svg+xml
 	// executes script when navigated to directly — so the escaping is the whole
 	// defence, and it lives at the top of badge.render: both label and value go

@@ -884,6 +884,10 @@ func (s *server) handlePublicPageBadge(w http.ResponseWriter, r *http.Request) {
 	if label == "" {
 		label = page.Title
 	}
+	cacheControl := badgeCachePublic
+	if page.PasswordHash != "" {
+		cacheControl = badgeCachePrivate
+	}
 	if err != nil {
 		// A badge is pasted into a README and glanced at; painting it green
 		// because the database is unreachable is worse than painting nothing.
@@ -893,7 +897,7 @@ func (s *server) handlePublicPageBadge(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.logger.Error("status page badge: store read failed", "slug", page.Slug, "error", err)
-		writeSVG(w, badge.Status(label, "unknown"))
+		writeSVGCached(w, badge.Status(label, "unknown"), cacheControl)
 		return
 	}
 	// Map overall status to a badge status token the badge package understands.
@@ -906,7 +910,7 @@ func (s *server) handlePublicPageBadge(w http.ResponseWriter, r *http.Request) {
 	case OverallMaintenance:
 		badgeStatus = "maintenance"
 	}
-	writeSVG(w, badge.Status(label, badgeStatus))
+	writeSVGCached(w, badge.Status(label, badgeStatus), cacheControl)
 }
 
 // --- availability archive ---
