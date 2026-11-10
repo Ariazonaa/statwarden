@@ -6161,13 +6161,14 @@
               "boolean",
               "null"
             ],
-            "description": "Omitted means published."
+            "description": "Omitted on create means published; omitted on update keeps the stored value."
           },
           "allow_indexing": {
             "type": [
               "boolean",
               "null"
-            ]
+            ],
+            "description": "Omitted on create means indexing is allowed; omitted on update keeps the stored value."
           },
           "monitor_ids": {
             "type": "array",

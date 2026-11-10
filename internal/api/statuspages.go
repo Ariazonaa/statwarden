@@ -205,6 +205,22 @@ func (s *server) handleUpdateStatusPage(w http.ResponseWriter, r *http.Request) 
 		writeProblemDetail(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// An omitted visibility flag keeps the stored value. toPage defaults both to
+	// true, which is the right answer for a NEW page and the wrong one here: a
+	// client that sent only the fields it changed published a draft, and opened
+	// it to search engines, on a title edit.
+	if req.Published == nil || req.AllowIndexing == nil {
+		existing, err := s.store.GetStatusPage(r.Context(), id)
+		if storeError(w, err) {
+			return
+		}
+		if req.Published == nil {
+			req.Published = &existing.Published
+		}
+		if req.AllowIndexing == nil {
+			req.AllowIndexing = &existing.AllowIndexing
+		}
+	}
 	page, err := s.store.UpdateStatusPage(r.Context(), id, req.toPage())
 	if storeError(w, err) {
 		return
