@@ -1499,3 +1499,30 @@ func TestAPassiveParentThatRecoversStopsSuppressingItsChildren(t *testing.T) {
 		t.Errorf("child event = %+v, want a live alert: its parent has recovered", ev)
 	}
 }
+
+// TestSubMillisecondLatencyIsNotRecordedAsZero: heartbeats are stored and
+// shown in whole milliseconds, and truncating a measured 300µs to 0 made a
+// fast check indistinguishable from one with nothing measured.
+func TestSubMillisecondLatencyIsNotRecordedAsZero(t *testing.T) {
+	reg := registry.New()
+	chk := &scriptChecker{typ: "fake", queue: []domain.CheckResult{
+		{Status: domain.StatusUp, Latency: 300 * time.Microsecond},
+		{Status: domain.StatusUp, Latency: 0},
+		{Status: domain.StatusUp, Latency: 5*time.Millisecond + 400*time.Microsecond},
+	}}
+	reg.Register(chk)
+
+	e, store, _ := newEngine(t, engine.Options{Registry: reg})
+	if err := e.Upsert(testMonitor(1, "fake")); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 3; i++ {
+		checkNowAndWait(t, e, store, 1, i)
+	}
+	want := []time.Duration{time.Millisecond, 0, 5*time.Millisecond + 400*time.Microsecond}
+	for i, hb := range store.Heartbeats() {
+		if hb.Latency == nil || *hb.Latency != want[i] {
+			t.Fatalf("heartbeat %d latency = %v, want %s", i, hb.Latency, want[i])
+		}
+	}
+}
