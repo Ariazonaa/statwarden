@@ -392,16 +392,16 @@ const apiKeys: ApiKey[] = [
 	{
 		id: 'key_ci',
 		name: 'CI pipeline',
-		scopes: ['monitors:read', 'monitors:write'],
-		prefix: 'upt_ci_9f2',
+		scopes: ['read', 'write'],
+		prefix: 'statwarden_c9f2a7d1',
 		lastUsedAt: iso(90 * 60000),
 		createdAt: iso(30 * 864e5)
 	},
 	{
 		id: 'key_rotating',
 		name: 'Grafana (rotating)',
-		scopes: ['monitors:read'],
-		prefix: 'upt_gr_41c',
+		scopes: ['read'],
+		prefix: 'statwarden_g41c0e85',
 		lastUsedAt: iso(4 * 36e5),
 		createdAt: iso(10 * 864e5),
 		expiresAt: iso(-80 * 864e5)
@@ -1730,12 +1730,15 @@ export const mockApi = {
 	}) {
 		await delay(150);
 		requireStepUp(input.confirm);
+		const token = `statwarden_${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
 		const k: ApiKey = {
 			id: id('key'),
 			name: input.name,
 			scopes: input.scopes,
-			prefix: `upt_${Math.random().toString(36).slice(2, 5)}`,
-			token: `upt_${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`,
+			// Same shape as auth.NewAPIKey: the secret starts with the real prefix,
+			// and the stored display prefix is a leading slice of that secret.
+			token,
+			prefix: token.slice(0, 'statwarden_'.length + 8),
 			createdAt: new Date().toISOString(),
 			expiresAt: input.expiresInDays
 				? new Date(Date.now() + input.expiresInDays * 864e5).toISOString()
