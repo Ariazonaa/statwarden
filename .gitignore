@@ -21,6 +21,10 @@ web/dist/*
 
 # --- Runtime data (docker bind mounts: postgres data + uploads) ---
 /data/
+# The non-Docker defaults of UPLOADS_DIR and BACKUP_DIR, relative to the
+# working directory: a `make dev` run writes avatars and dumps here.
+/uploads/
+/backups/
 
 # --- IDE / OS / Tooling ---
 .idea/

@@ -7,7 +7,6 @@
 .git
 .gitattributes
 .gitignore
-.gitea
 .github
 .golangci.yml
 
@@ -33,6 +32,7 @@ coverage.html
 
 # --- Runtime data ---
 uploads/
+backups/
 /data/
 
 # --- IDE / OS / Tooling / agents ---
