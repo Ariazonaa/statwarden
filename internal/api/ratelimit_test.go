@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -195,5 +196,32 @@ func TestRateLimiterLimitsAfterSweep(t *testing.T) {
 	clk.add(per + time.Second)
 	if !l.allow("public:203.0.113.7") {
 		t.Fatal("request should be allowed after the window resets")
+	}
+}
+
+// TestLoginKeyIsBounded: the lockout key is built from the identifier exactly
+// as an unauthenticated caller typed it, and the body limit is 1 MiB. Kept
+// verbatim, three failed logins with megabyte-long identifiers parked megabytes
+// in the lockout map for the whole cool-off. The key has to be a fixed size
+// whatever was typed, without merging identifiers that are genuinely different.
+func TestLoginKeyIsBounded(t *testing.T) {
+	const ip = "203.0.113.9"
+	huge := loginKey(strings.Repeat("a", 1<<20), ip)
+	short := loginKey("ops@example.test", ip)
+	if len(huge) != len(short) {
+		t.Fatalf("key length depends on the identifier: %d bytes for 1 MiB typed, %d for a short one",
+			len(huge), len(short))
+	}
+	if len(huge) > 128 {
+		t.Fatalf("key is %d bytes, want a small fixed size", len(huge))
+	}
+	if loginKey("  Ops@Example.TEST ", ip) != short {
+		t.Fatal("case or surrounding whitespace produced a second budget for the same identifier")
+	}
+	if loginKey("dev@example.test", ip) == short {
+		t.Fatal("two different identifiers share one bucket")
+	}
+	if loginKey("ops@example.test", "198.51.100.4") == short {
+		t.Fatal("two different client addresses share one bucket")
 	}
 }

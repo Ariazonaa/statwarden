@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"strings"
 	"sync"
@@ -196,6 +198,13 @@ func (l *lockout) reset(key string) {
 // typed, case-folded, plus the client IP. Folding matters because the login
 // itself resolves an address or username case-insensitively, so "Bob@x" and
 // "bob@x" must not be two budgets.
+//
+// The folded identifier is stored as its SHA-256, not verbatim. It is whatever
+// an unauthenticated caller put in a body of up to 1 MiB, and the bucket lives
+// for the whole cool-off, so a verbatim key let a handful of failed logins park
+// megabytes in this map. A digest is a fixed size and still keeps distinct
+// identifiers in distinct buckets.
 func loginKey(login, ip string) string {
-	return strings.ToLower(strings.TrimSpace(login)) + "|" + ip
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(login))))
+	return hex.EncodeToString(sum[:]) + "|" + ip
 }
