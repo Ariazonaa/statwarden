@@ -23,7 +23,7 @@
 		"@testing-library/svelte": "^5.4.2",
 		"@testing-library/user-event": "^14.6.8",
 		"@types/qrcode": "^1.5.5",
-		"jsdom": "^29.1.1",
+		"jsdom": "^31.0.0",
 		"prettier": "^3.9.10",
 		"prettier-plugin-svelte": "^3.4.0",
 		"svelte": "^5.57.3",
