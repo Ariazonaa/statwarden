@@ -31,8 +31,9 @@ updates:
       - dependency-name: "@sveltejs/adapter-static"
         update-types: [version-update:semver-major]
 
-  # Every action is pinned in the workflows and they move together, so one
-  # pull request carries all of them, majors included.
+  # Every action is pinned by commit SHA, with the version it stands for in a
+  # trailing comment; Dependabot moves both. They move together, so one pull
+  # request carries all of them, majors included.
   - package-ecosystem: github-actions
     directory: /
     schedule:

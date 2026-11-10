@@ -23,7 +23,7 @@ jobs:
           semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
           [[ "$TAG" =~ $semver ]] || { echo "::error::'$TAG' is not a vMAJOR.MINOR.PATCH tag"; exit 1; }
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The release text is the version's section of CHANGELOG.md, so the notes
       # on GitHub and the file in the repository cannot say different things.
@@ -35,10 +35,10 @@ jobs:
           bash .github/scripts/release-notes.sh "$GITHUB_REF_NAME" > notes.md
           cat notes.md
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -76,7 +76,7 @@ jobs:
           done
           ( cd dist && sha256sum *.tar.gz | tee SHA256SUMS )
 
-      - uses: softprops/action-gh-release@v3
+      - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           body_path: notes.md
           files: |
