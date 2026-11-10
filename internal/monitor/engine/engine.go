@@ -249,6 +249,12 @@ type job struct {
 	// "paused" and the check then overwrote it with its own result. Lock order
 	// is persistMu before Engine.mu; persistMu is never taken under Engine.mu.
 	persistMu sync.Mutex
+	// statusUnsaved records that the last status write failed. The column is
+	// otherwise written only on a transition, so one failed write left the row
+	// stale indefinitely, and a restart then loaded that stale status — a DOWN
+	// long over was adopted as a running outage. Set, it makes the next check
+	// write the status whether or not it transitions.
+	statusUnsaved bool
 }
 
 // New builds an Engine from opts. It does not schedule anything yet.
@@ -780,9 +786,13 @@ func (e *Engine) runCheck(j *job, m domain.Monitor, prev domain.MonitorStatus, r
 	}()
 	e.mu.Lock()
 	current := !j.removed && j.gen == gen
+	writeStatus := transitioned || j.statusUnsaved
 	e.mu.Unlock()
 	if current {
-		e.persist(m, res, next, newRetries, transitioned, now)
+		saved := e.persist(m, res, next, newRetries, transitioned, writeStatus, now)
+		e.mu.Lock()
+		j.statusUnsaved = !saved
+		e.mu.Unlock()
 		// A flap ends before this check's own transition is looked at: a change
 		// arriving after a whole quiet window is an ordinary alert again, not one
 		// more held back.
@@ -954,9 +964,10 @@ func (e *Engine) timeoutFor(m domain.Monitor, checker registry.Checker) time.Dur
 	return e.defaultTimeout
 }
 
-// persist writes the heartbeat (always), the monitor status (on transitions)
-// and observed certificate data. Store failures are logged, never fatal.
-func (e *Engine) persist(m domain.Monitor, res domain.CheckResult, next domain.MonitorStatus, retriesNow int, transitioned bool, now time.Time) {
+// persist writes the heartbeat (always), the monitor status (when writeStatus)
+// and observed certificate data. Store failures are logged, never fatal; the
+// result reports whether the status column now holds next.
+func (e *Engine) persist(m domain.Monitor, res domain.CheckResult, next domain.MonitorStatus, retriesNow int, transitioned, writeStatus bool, now time.Time) (statusSaved bool) {
 	ctx, cancel := context.WithTimeout(e.baseCtx, persistTimeout)
 	defer cancel()
 
@@ -984,9 +995,11 @@ func (e *Engine) persist(m domain.Monitor, res domain.CheckResult, next domain.M
 	if e.onHeartbeat != nil {
 		e.onHeartbeat(hb)
 	}
-	if transitioned {
+	statusSaved = true
+	if writeStatus {
 		if err := e.store.UpdateMonitorStatus(ctx, m.ID, next); err != nil {
-			e.log.Error("engine: update monitor status", "monitor_id", m.ID, "error", err)
+			e.log.Error("engine: update monitor status; retrying on the next check", "monitor_id", m.ID, "error", err)
+			statusSaved = false
 		}
 	}
 	if res.Cert != nil {
@@ -994,6 +1007,7 @@ func (e *Engine) persist(m domain.Monitor, res domain.CheckResult, next domain.M
 			e.log.Error("engine: save cert info", "monitor_id", m.ID, "error", err)
 		}
 	}
+	return statusSaved
 }
 
 // persistStatus writes just the status column (used by Pause/Resume).
