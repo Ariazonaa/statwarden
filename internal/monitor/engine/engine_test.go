@@ -1732,3 +1732,37 @@ func TestShutdownDoesNotRecordAbortedChecksAsDown(t *testing.T) {
 		t.Fatal("aborted check wrote a monitor status")
 	}
 }
+
+// TestFailedStatusWriteIsRetried: the status column is written only on a
+// transition, so a single failed write — a database blip — left the row at
+// its old value for good. After a restart the engine loaded that stale DOWN
+// and the dispatcher adopted an outage that had ended long before.
+func TestFailedStatusWriteIsRetried(t *testing.T) {
+	reg := registry.New()
+	chk := &scriptChecker{typ: "fake", fallback: up()}
+	reg.Register(chk)
+
+	var failed atomic.Bool
+	store := &hookStore{MemStore: engine.NewMemStore()}
+	store.statusErr = func(domain.MonitorStatus) error {
+		if failed.CompareAndSwap(false, true) {
+			return errors.New("connection reset")
+		}
+		return nil
+	}
+	e, _, _ := newEngine(t, engine.Options{Registry: reg, Store: store})
+	m := testMonitor(1, "fake")
+	m.Status = domain.StatusDown
+	if err := e.Upsert(m); err != nil {
+		t.Fatal(err)
+	}
+	checkNowAndWait(t, e, store.MemStore, 1, 1) // DOWN→UP; the write fails
+	if !failed.Load() {
+		t.Fatal("the status write was never attempted")
+	}
+	checkNowAndWait(t, e, store.MemStore, 1, 2) // UP→UP: no transition
+	waitFor(t, "the retried write", func() bool {
+		st, ok := store.Status(1)
+		return ok && st == domain.StatusUp
+	})
+}
