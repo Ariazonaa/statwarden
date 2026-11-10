@@ -737,6 +737,14 @@ func (e *Engine) runCheck(j *job, m domain.Monitor, prev domain.MonitorStatus, r
 	res, err := e.safeCheck(ctx, checker, m.Config)
 	elapsed := time.Since(start)
 	cancel()
+	// The base context ends only when Stop gives up waiting and aborts the
+	// checks still running. What such a check returns ("context canceled")
+	// says nothing about the target, and recording it turned every slow check
+	// into a DOWN heartbeat and an alert on every restart.
+	if e.baseCtx.Err() != nil {
+		e.clearRunning(j)
+		return
+	}
 	if err != nil {
 		res = domain.CheckResult{Status: domain.StatusDown, Latency: elapsed, Message: err.Error()}
 	}
