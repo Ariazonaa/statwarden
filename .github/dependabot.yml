@@ -22,6 +22,14 @@ updates:
     groups:
       npm-minor:
         update-types: [minor, patch]
+    ignore:
+      # @sveltejs/kit 2 accepts TypeScript up to 6 as a peer, so a major bump
+      # fails npm ci until the SvelteKit upgrade lifts that range.
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
+      # adapter-static 4 requires @sveltejs/kit 3; it comes with that migration.
+      - dependency-name: "@sveltejs/adapter-static"
+        update-types: [version-update:semver-major]
 
   # Every action is pinned in the workflows and they move together, so one
   # pull request carries all of them, majors included.
@@ -39,3 +47,9 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
+    ignore:
+      # The Go build image has to match the go directive in go.mod (see the
+      # comment there), and Dependabot can only move the image. Go is raised
+      # by hand in both places; govulncheck in CI fails on any reachable
+      # standard-library advisory, which is what prompts it.
+      - dependency-name: golang
