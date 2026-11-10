@@ -167,7 +167,7 @@ func TestPushEndpoint(t *testing.T) {
 	pr := &fakePush{monitor: domain.Monitor{ID: 5, Status: domain.StatusUp}}
 	h := newExtHarness(t, nil, pr)
 
-	rec := h.request(http.MethodPost, "/api/v1/push/tok123?status=up&ping=42&msg=ok", nil)
+	rec := h.request(http.MethodPost, "/api/v1/push/"+wellFormedPushID+"?status=up&ping=42&msg=ok", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("push = %d, body %s", rec.Code, rec.Body.String())
 	}
@@ -180,7 +180,7 @@ func TestPushEndpoint(t *testing.T) {
 	if !body.OK || body.MonitorID != 5 || body.Status != "up" {
 		t.Fatalf("push body = %+v", body)
 	}
-	if len(pr.calls) != 1 || pr.calls[0] != "tok123" {
+	if len(pr.calls) != 1 || pr.calls[0] != wellFormedPushID {
 		t.Fatalf("recorder calls = %v", pr.calls)
 	}
 }
@@ -188,7 +188,7 @@ func TestPushEndpoint(t *testing.T) {
 func TestPushEndpointUnknownToken(t *testing.T) {
 	pr := &fakePush{err: push.ErrNotFound}
 	h := newExtHarness(t, nil, pr)
-	rec := h.request(http.MethodPost, "/api/v1/push/nope", nil)
+	rec := h.request(http.MethodPost, "/api/v1/push/"+wellFormedPushID, nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown token push = %d, want 404", rec.Code)
 	}

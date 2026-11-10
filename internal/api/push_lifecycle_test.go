@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -106,7 +107,7 @@ func TestPushRateLimitIsPerTokenNotPerIP(t *testing.T) {
 	// Comfortably past the old per-IP ceiling, each beat carrying a DIFFERENT
 	// monitor's token, all from the same client address.
 	for i := 0; i < publicRateLimit*2; i++ {
-		rec := h.request(http.MethodPost, "/api/v1/push/token-"+itoa(i), nil)
+		rec := h.request(http.MethodPost, "/api/v1/push/"+fmt.Sprintf("%032x", i), nil)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("beat %d from a distinct token = %d, want 200; body %s",
 				i, rec.Code, rec.Body.String())
@@ -119,7 +120,7 @@ func TestPushRateLimitIsPerTokenNotPerIP(t *testing.T) {
 func TestPushRateLimitStillBrakesASingleToken(t *testing.T) {
 	h := newExtHarness(t, nil, &fakePush{})
 	for i := 0; i < pushTokenRateLimit*2; i++ {
-		if h.request(http.MethodPost, "/api/v1/push/one-token", nil).Code == http.StatusTooManyRequests {
+		if h.request(http.MethodPost, "/api/v1/push/"+wellFormedPushID, nil).Code == http.StatusTooManyRequests {
 			return
 		}
 	}
