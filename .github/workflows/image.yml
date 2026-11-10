@@ -29,6 +29,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Same check as release.yml, and just as early: a tag whose version has
+      # no CHANGELOG.md section gets no GitHub release, so it must not get a
+      # version image either.
+      - name: CHANGELOG.md has a section for this tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: bash .github/scripts/release-notes.sh "$GITHUB_REF_NAME" > /dev/null
+
       - name: Build metadata
         id: meta
         run: |
