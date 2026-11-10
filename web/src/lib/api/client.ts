@@ -69,7 +69,7 @@ const BASE = '/api/v1';
  * The largest page the server will return (internal/api/respond.go's maxLimit).
  *
  * Asked for explicitly, because the default is 50 and every list screen here
- * renders whatever it is given without pagination.
+ * renders whatever it is given without pagination — listAll() walks the pages.
  */
 const maxListLimit = 200;
 
@@ -359,6 +359,35 @@ interface WireList<T> {
 	total: number;
 	limit: number;
 	offset: number;
+}
+
+/**
+ * Walks every page of a writeList() endpoint and returns all its items.
+ *
+ * The server caps a page at maxListLimit, and the screens built on these lists
+ * (the monitor list, the audit search) filter what they hold rather than asking
+ * the server — so one page meant monitor 201 and audit entry 201 simply did not
+ * exist as far as the UI was concerned.
+ *
+ * Duplicates are dropped by id: a row inserted mid-walk shifts the offsets of a
+ * newest-first list by one, and a repeated id would break every keyed `#each`
+ * that renders the result. The walk also stops on an empty page, so a total that
+ * shrinks underneath it (rows deleted meanwhile) cannot loop forever.
+ */
+async function listAll<W extends { id: number }>(path: string): Promise<W[]> {
+	const out: W[] = [];
+	const seen = new Set<number>();
+	for (let offset = 0; ;) {
+		const page = await http<WireList<W>>('GET', `${path}?limit=${maxListLimit}&offset=${offset}`);
+		const items = page.items ?? [];
+		for (const item of items) {
+			if (seen.has(item.id)) continue;
+			seen.add(item.id);
+			out.push(item);
+		}
+		offset += items.length;
+		if (items.length === 0 || offset >= page.total) return out;
+	}
 }
 
 /** Envelope used by the endpoints that wrap items without pagination. */
@@ -1529,18 +1558,15 @@ const realApi: Api = {
 		})),
 	unlinkIdentity: (id) => http('DELETE', `/me/oidc/identities/${id}`),
 
-	// The page cap is asked for EXPLICITLY.
+	// Every page, not the first.
 	//
 	// Sending no limit meant the server's default of 50, and the mapper discarded
 	// `total` — so on any instance with more than fifty monitors the dashboard,
 	// the maintenance picker and the status-page picker all showed fifty of N
-	// with nothing to say so. The mock returns everything, which is why it never
-	// showed up in development. maxListLimit matches the server's own cap
-	// (internal/api/respond.go), which is also the bulk endpoint's batch size.
-	listMonitors: () =>
-		http<WireList<WireMonitor>>('GET', `/monitors?limit=${maxListLimit}`).then((w) =>
-			(w.items ?? []).map(monitorFromWire)
-		),
+	// with nothing to say so. Raising the limit to the server's cap only moved
+	// the cliff to 200. The mock returns everything, which is why it never
+	// showed up in development.
+	listMonitors: () => listAll<WireMonitor>('/monitors').then((w) => w.map(monitorFromWire)),
 	getMonitor: (id) => http<WireMonitor>('GET', `/monitors/${id}`).then(monitorFromWire),
 	createMonitor: (i) =>
 		http<WireMonitor>('POST', '/monitors', monitorToWire(i)).then(monitorFromWire),
@@ -1709,14 +1735,17 @@ const realApi: Api = {
 		}).then((w) => apiKeyFromWire(w.api_key, w.secret)),
 	revokeApiKey: (id) => http('DELETE', `/me/api-keys/${id}`),
 
-	// Same as listMonitors: without a limit the feed was the newest fifty rows,
-	// and the Activity screen searches only what it has — so looking for an actor
-	// whose last action was fifty-one entries ago answered "nothing found" on an
-	// audit trail, which is the one place a false negative is unacceptable.
-	auditLog: () =>
-		http<WireList<WireAuditEntry>>('GET', `/audit-log?limit=${maxListLimit}`).then((w) =>
-			(w.items ?? []).map(auditEntryFromWire)
-		),
+	// Same as listMonitors: the Activity screen searches only what it has, so a
+	// single page answered "nothing found" for an actor whose last action was one
+	// entry past it — on an audit trail, the one place a false negative is
+	// unacceptable. Hence every page by default. A caller that only shows the
+	// newest few (the dashboard widget) names a limit and gets one page of it.
+	auditLog: (limit) =>
+		limit
+			? http<WireList<WireAuditEntry>>('GET', `/audit-log?limit=${limit}`).then((w) =>
+					(w.items ?? []).map(auditEntryFromWire)
+				)
+			: listAll<WireAuditEntry>('/audit-log').then((w) => w.map(auditEntryFromWire)),
 	getSettings: () =>
 		http<WireSetting[] | null>('GET', '/settings').then((w) => settingsFromWire(w ?? [])),
 	version: () =>
