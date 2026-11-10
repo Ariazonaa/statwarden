@@ -35,9 +35,9 @@ func (s *PgStore) CreateIncident(ctx context.Context, in Incident) (Incident, er
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 	out, err := scanIncident(tx.QueryRow(ctx, `
-		INSERT INTO incidents (status_page_id, title, body, severity, status, pinned, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING `+incidentCols,
-		in.StatusPageID, in.Title, in.Body, in.Severity, in.Status, in.Pinned, in.CreatedBy))
+		INSERT INTO incidents (status_page_id, title, body, severity, status, pinned, created_by, resolved_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING `+incidentCols,
+		in.StatusPageID, in.Title, in.Body, in.Severity, in.Status, in.Pinned, in.CreatedBy, in.ResolvedAt))
 	if err != nil {
 		return Incident{}, mapErr(err)
 	}
