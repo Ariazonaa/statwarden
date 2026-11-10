@@ -132,6 +132,13 @@ func (s *server) handleCreateIncident(w http.ResponseWriter, r *http.Request) {
 		MonitorIDs:   req.MonitorIDs,
 		CreatedBy:    &pr.userID,
 	}
+	// An incident recorded after the fact is created already resolved. The edit
+	// and timeline paths stamp resolved_at on resolution; this one did not, so
+	// such an incident went public with no end time and no computable duration.
+	if in.Status == IncidentResolved {
+		now := s.now()
+		in.ResolvedAt = &now
+	}
 	created, err := s.store.CreateIncident(r.Context(), in)
 	if storeError(w, err) {
 		return
@@ -161,7 +168,12 @@ func (s *server) handleUpdateIncident(w http.ResponseWriter, r *http.Request) {
 		writeProblemDetail(w, http.StatusBadRequest, "invalid severity or status")
 		return
 	}
-	existing.Title = req.Title
+	// An omitted title keeps the stored one, as severity and status do above.
+	// Copying it verbatim let a status-only PUT blank the incident's name on the
+	// public page — a value the create path refuses outright.
+	if req.Title != "" {
+		existing.Title = req.Title
+	}
 	existing.Body = req.Body
 	existing.Severity = req.Severity
 	existing.Status = req.Status
