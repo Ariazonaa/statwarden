@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"math/big"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/gosnmp/gosnmp"
 
@@ -176,5 +178,64 @@ func TestCheckRejectsInvalidConfig(t *testing.T) {
 	var ch Checker
 	if _, err := ch.Check(context.Background(), json.RawMessage(`{"host":"h","oid":"1.2","version":"2c"}`)); err == nil {
 		t.Fatal("Check must reject v2c config without community")
+	}
+}
+
+// silentAgent is a loopback UDP socket that reads requests and never answers.
+func silentAgent(t *testing.T) (host string, port int) {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			if _, _, err := pc.ReadFrom(buf); err != nil {
+				return
+			}
+		}
+	}()
+	addr := pc.LocalAddr().(*net.UDPAddr)
+	return addr.IP.String(), addr.Port
+}
+
+// gosnmp's Timeout is per attempt and Retries adds attempts, so handing it the
+// check's whole remaining time with one retry let a silent agent hold the check
+// for twice its timeout. The attempts together must fit the deadline.
+func TestDialSessionFitsAllAttemptsIntoTheDeadline(t *testing.T) {
+	host, port := silentAgent(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	sess, err := dialSession(ctx, Config{Host: host, Port: port, Community: "public", OID: "1.3.6.1.2.1.1.1.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	g := sess.(*liveSession).GoSNMP
+	if total := g.Timeout * time.Duration(g.Retries+1); total > 4*time.Second {
+		t.Fatalf("%d attempts × %s = %s, want at most the 4s deadline", g.Retries+1, g.Timeout, total)
+	}
+}
+
+// Cancelling the check (the engine shutting down) must end a request that is
+// waiting for an agent that never answers, not leave it to its timeout.
+func TestCheckHonoursContextCancel(t *testing.T) {
+	host, port := silentAgent(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+
+	start := time.Now()
+	var ch Checker
+	res, err := ch.Check(ctx, mustCfg(t, Config{Host: host, Port: port, Community: "public", OID: "1.3.6.1.2.1.1.1.0"}))
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if res.Status != domain.StatusDown {
+		t.Fatalf("status = %s, want down", res.Status)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("Check returned %s after its context was cancelled, want promptly", d)
 	}
 }

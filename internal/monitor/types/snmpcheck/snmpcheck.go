@@ -218,18 +218,28 @@ func normalizeOID(oid string) string {
 	return oid
 }
 
+// snmpRetries is how many times a request is repeated after a timeout: SNMP
+// runs over UDP, where one lost datagram should not fail a check.
+const snmpRetries = 1
+
 // dialSession is the default gosnmp transport.
 func dialSession(ctx context.Context, c Config) (session, error) {
 	g := &gosnmp.GoSNMP{
 		Target:    c.Host,
 		Port:      uint16(c.port()), //nolint:gosec // validated to 0-65535
 		Transport: "udp",
-		Retries:   1,
-		Timeout:   defaultTimeout,
+		Retries:   snmpRetries,
+		Timeout:   defaultTimeout / (snmpRetries + 1),
+		// Context lets a cancelled check (shutdown) end a request that is still
+		// waiting; without it gosnmp waits out every attempt regardless.
+		Context: ctx,
 	}
+	// Timeout is per ATTEMPT and Retries adds attempts, so the remaining time is
+	// split between them. Handing each attempt all of it let a silent agent
+	// hold the check for twice its timeout.
 	if deadline, ok := ctx.Deadline(); ok {
 		if d := time.Until(deadline); d > 0 {
-			g.Timeout = d
+			g.Timeout = d / (snmpRetries + 1)
 		}
 	}
 
@@ -257,7 +267,24 @@ func dialSession(ctx context.Context, c Config) (session, error) {
 	if err := g.Connect(); err != nil {
 		return nil, fmt.Errorf("snmp: connect %s: %w", c.Host, err)
 	}
-	return g, nil
+	// gosnmp consults Context only between attempts; a read already waiting
+	// sits out its timeout. Expiring the socket deadline on cancellation ends
+	// that read, and the next attempt then sees the cancelled context.
+	conn := g.Conn
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	return &liveSession{GoSNMP: g, stop: stop}, nil
+}
+
+// liveSession is a gosnmp session tied to the check's context.
+type liveSession struct {
+	*gosnmp.GoSNMP
+	stop func() bool
+}
+
+// Close implements session.
+func (s *liveSession) Close() error {
+	s.stop()
+	return s.GoSNMP.Close()
 }
 
 // msgFlags maps a security level to gosnmp message flags.
