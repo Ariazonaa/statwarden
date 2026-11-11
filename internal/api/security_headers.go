@@ -1,6 +1,11 @@
 package api
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+
+	"github.com/Ariazonaa/statwarden/internal/domain"
+)
 
 // baseCSP is the response Content-Security-Policy for the dashboard and API.
 //
@@ -64,9 +69,37 @@ func securityHeaders(next http.Handler) http.Handler {
 // base-uri and form-action from the response — on the one route that renders
 // operator-supplied titles, descriptions and footer text to anonymous
 // visitors, i.e. precisely where those directives earn their keep.
+//
+// Only the two routes the SPA actually renders as a public status page are
+// relaxed: /status/{slug} and /status/{slug}/history. Every other path under
+// /status/ keeps frame-ancestors 'none'. The SPA renders its error page for a
+// path it does not know, and that page navigates into the dashboard
+// client-side — without a new response, so without a new policy — which made
+// the logged-in dashboard reachable inside anybody's iframe through any
+// made-up /status/ path.
 func framableStatusPage(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Security-Policy", framableCSP)
+		if isPublicStatusRoute(r.URL.Path) {
+			w.Header().Set("Content-Security-Policy", framableCSP)
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isPublicStatusRoute reports whether path is /status/{slug} or
+// /status/{slug}/history, optionally with one trailing slash (SvelteKit
+// normalises that away on the client, so an embed written with it still lands
+// on the page). The slug must have the shape the API enforces on write, so a
+// path that cannot name a page is never relaxed.
+func isPublicStatusRoute(path string) bool {
+	rest, ok := strings.CutPrefix(path, "/status/")
+	if !ok {
+		return false
+	}
+	rest = strings.TrimSuffix(rest, "/")
+	slug, tail, nested := strings.Cut(rest, "/")
+	if nested && tail != "history" {
+		return false
+	}
+	return domain.ValidStatusPageSlug(slug)
 }

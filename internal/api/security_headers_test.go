@@ -37,10 +37,9 @@ func TestFrameAncestorsDefaultDeny(t *testing.T) {
 func TestPublicStatusPagesStayFramable(t *testing.T) {
 	h := newTestHandler(t)
 
-	// The nested path pins that "/status/*" covers the whole SPA subtree, not
-	// just the bare page: the framable middleware is on /status/*, so any
-	// client-routed subpath under a status page stays framable inside an embed.
-	for _, target := range []string{"/status/acme", "/status/acme/history"} {
+	// Exactly the two public status routes the SPA has — the page and its
+	// availability archive — stay framable, with or without a trailing slash.
+	for _, target := range []string{"/status/acme", "/status/acme/history", "/status/acme/", "/status/acme/history/"} {
 		rec := do(t, h, http.MethodGet, target)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("GET %s = %d, want 200", target, rec.Code)
@@ -61,6 +60,30 @@ func TestPublicStatusPagesStayFramable(t *testing.T) {
 	}
 
 	for _, target := range []string{"/", "/dashboard", "/api/v1/version", "/healthz"} {
+		rec := do(t, h, http.MethodGet, target)
+		if got := rec.Header().Get("Content-Security-Policy"); got != wantBaseCSP {
+			t.Errorf("GET %s Content-Security-Policy = %q, want %q", target, got, wantBaseCSP)
+		}
+	}
+}
+
+// TestOnlyRealStatusRoutesAreFramable pins that the relaxed policy covers the
+// public status routes and nothing else under /status/. The whole subtree used
+// to be framable, and any path the SPA does not know renders its error page —
+// whose button navigates into the dashboard inside the frame, client-side,
+// without a new response and therefore without a new policy. A hostile embed
+// could then frame the logged-in dashboard of whoever visited it.
+func TestOnlyRealStatusRoutesAreFramable(t *testing.T) {
+	h := newTestHandler(t)
+	for _, target := range []string{
+		"/status/",
+		"/status",
+		"/status/acme/settings",
+		"/status/acme/history/extra",
+		"/status/acme//history",
+		"/status/Not_A_Slug!",
+		"/status/" + strings.Repeat("a", 65),
+	} {
 		rec := do(t, h, http.MethodGet, target)
 		if got := rec.Header().Get("Content-Security-Policy"); got != wantBaseCSP {
 			t.Errorf("GET %s Content-Security-Policy = %q, want %q", target, got, wantBaseCSP)
