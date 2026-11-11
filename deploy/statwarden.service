@@ -85,6 +85,9 @@ RestrictNamespaces=true
 RestrictSUIDSGID=true
 LockPersonality=true
 ReadWritePaths=/var/lib/statwarden
+# Nothing this service writes — uploads, and database dumps that hold every
+# password and session hash — is meant for other local users.
+UMask=0027
 # ICMP raw sockets for ping monitors. Remove both lines if you don't use them.
 AmbientCapabilities=CAP_NET_RAW
 CapabilityBoundingSet=CAP_NET_RAW
