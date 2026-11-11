@@ -13,7 +13,7 @@
 	 * put the dashboard's refresh rate back under the operator's nose.
 	 */
 	import type { Monitor } from '$lib/api';
-	import { t } from '$lib/i18n';
+	import { t, formatUptime } from '$lib/i18n';
 	import { EmptyState, Sparkline, StatusBadge } from '$lib/design-system';
 
 	/* Plain <a href>, no click handler. SvelteKit's client router already
@@ -40,7 +40,7 @@
 		if (metric === 'uptime') {
 			// undefined means the window held no conclusive heartbeat — a real and
 			// different answer from 0%, so it is not rendered as a number.
-			return m.uptime24h === undefined ? '—' : `${m.uptime24h.toFixed(2)}%`;
+			return formatUptime(m.uptime24h);
 		}
 		if (metric === 'latency') {
 			return m.latencyMs === undefined ? '—' : `${m.latencyMs} ms`;
