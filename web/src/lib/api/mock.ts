@@ -1035,8 +1035,12 @@ export const mockApi = {
 		await delay();
 		return { needsSetup: mockNeedsSetup };
 	},
-	async setup(input: { username: string; email: string; password: string }) {
+	async setup(input: { username: string; email: string; password: string; setupToken: string }) {
 		await delay(200);
+		// The real server checks the token from its startup log; the mock has no
+		// log, so any non-empty value stands in for it.
+		if (!input.setupToken.trim())
+			throw { title: 'Forbidden', status: 403, detail: 'invalid setup token' };
 		adminUser.username = input.username;
 		adminUser.email = input.email;
 		mockNeedsSetup = false;

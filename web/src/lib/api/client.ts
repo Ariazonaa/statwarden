@@ -1499,6 +1499,7 @@ const realApi: Api = {
 			email: i.email,
 			username: i.username,
 			password: i.password,
+			setup_token: i.setupToken.trim(),
 			// Kept equal to the username so the server's display_name column stays
 			// populated; the wizard exposes a single name field.
 			display_name: i.username
