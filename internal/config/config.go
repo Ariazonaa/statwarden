@@ -425,6 +425,15 @@ func Load(lookup func(key string) (string, bool)) (*Config, error) {
 			addProblem("PUBLIC_BASE_URL: %q must be an absolute http(s) URL", raw)
 		} else {
 			cfg.PublicBaseURL = strings.TrimRight(raw, "/")
+			// Plain http on a real host means every session cookie is sent
+			// without Secure, i.e. readable by anything on the path. A warning,
+			// not a refusal: an intranet without TLS is a choice someone may
+			// make, but it should be one they know they made. Loopback is the
+			// local-use default and stays quiet.
+			if u.Scheme == "http" && !cfg.DevMode && !isLoopbackHost(u.Hostname()) {
+				addWarning("PUBLIC_BASE_URL: %q is plain http, so session cookies are sent without "+
+					"the Secure attribute; serve the instance over https (see docs/reverse-proxy.md)", raw)
+			}
 		}
 	}
 
@@ -750,6 +759,28 @@ func loadAnomaly(
 // ":3001" (every interface), "127.0.0.1:3001" or "[::1]:3001".
 func (c *Config) Addr() string {
 	return net.JoinHostPort(c.ListenAddr, strconv.Itoa(c.Port))
+}
+
+// SecureCookies reports whether cookies must carry the Secure attribute: when
+// PublicBaseURL is https.
+//
+// It reads the PARSED scheme. url.Parse lowercases it, which is why Load
+// accepts "HTTPS://status.example.com" — and a prefix check on the raw string
+// then answered false for that https deployment and served the session cookie
+// without Secure.
+func (c *Config) SecureCookies() bool {
+	u, err := url.Parse(c.PublicBaseURL)
+	return err == nil && u.Scheme == "https"
+}
+
+// isLoopbackHost reports whether host (no port) names this machine: the name
+// localhost or a loopback IP literal.
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	a, err := netip.ParseAddr(host)
+	return err == nil && a.IsLoopback()
 }
 
 // MinAutoWorkerPoolSize floors the automatic sizing. Checks are I/O-bound and
