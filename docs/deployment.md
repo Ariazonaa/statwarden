@@ -463,9 +463,16 @@ is then hard-deleted on a timer and you empty it by hand. Purging a single
 monitor immediately is admin-only, from the same dialog — the bin exists so that
 the irreversible step is separate and deliberate.
 
-All three passes also run independently: a failing heartbeat delete no longer stops
-the delivery-log trim, and vice versa. They touch unrelated tables, and the
-heartbeat delete is the one large enough to hit a statement timeout.
+A fourth pass has no setting: it deletes **expired credentials** — sessions and
+WebAuthn challenges a day past their expiry, password-reset tokens a week past
+theirs. They cannot be used any more, and without it every login left a row
+behind for good. The audit log and the hourly/daily rollups are not pruned by
+anything; both are small next to the heartbeats.
+
+All passes run independently: a failing heartbeat delete does not stop the
+delivery-log trim, and vice versa. They touch unrelated tables. The heartbeat
+delete, the only large one, works in batches of 10,000 rows, each its own
+transaction, over a BRIN index on `checked_at`.
 
 ### The notification outbox
 

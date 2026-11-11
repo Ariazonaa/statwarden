@@ -92,6 +92,33 @@ func (s *PgStore) PruneDeliveriesBefore(ctx context.Context, cutoff time.Time) (
 	return ct.RowsAffected(), nil
 }
 
+// PruneExpired implements Store. No placeholders: the cutoffs are computed by
+// the database, on the clock that wrote expires_at.
+//
+// The grace periods are why this is not simply `expires_at < now()`. A day for
+// sessions and WebAuthn challenges keeps a request that is presenting one right
+// now on the auth code's "expired" path instead of a row vanishing mid-lookup,
+// and absorbs a stepped clock. Reset tokens keep a week: migration 0008 keeps
+// consumed ones on purpose so a replay stays distinguishable from an unknown
+// token internally, and a week is long enough to look into one.
+//
+// Each statement is served by the expires_at index its table already has.
+func (s *PgStore) PruneExpired(ctx context.Context) (int64, error) {
+	var total int64
+	for _, stmt := range []string{
+		`DELETE FROM sessions WHERE expires_at < now() - interval '1 day'`,
+		`DELETE FROM webauthn_challenges WHERE expires_at < now() - interval '1 day'`,
+		`DELETE FROM password_resets WHERE expires_at < now() - interval '7 days'`,
+	} {
+		ct, err := s.pool.Exec(ctx, stmt)
+		if err != nil {
+			return total, err
+		}
+		total += ct.RowsAffected()
+	}
+	return total, nil
+}
+
 // PruneBin implements Store.
 //
 // Hand-written for the reason PruneDeliveriesBefore is: sqlcgen is stale against

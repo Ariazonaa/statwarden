@@ -36,6 +36,10 @@ type fakeStore struct {
 	binPruned []PrunedMonitor
 	binErr    error
 	binCalls  int
+
+	expiredCalls   int
+	expiredDeleted int64
+	expiredErr     error
 }
 
 func (f *fakeStore) PruneBefore(_ context.Context, cutoff time.Time) (int64, error) {
@@ -63,6 +67,19 @@ func (f *fakeStore) PruneBin(_ context.Context, olderThanDays int) ([]PrunedMoni
 		return nil, f.binErr
 	}
 	return append([]PrunedMonitor(nil), f.binPruned...), nil
+}
+
+func (f *fakeStore) PruneExpired(context.Context) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.expiredCalls++
+	return f.expiredDeleted, f.expiredErr
+}
+
+func (f *fakeStore) expiredSnapshot() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.expiredCalls
 }
 
 func (f *fakeStore) binSnapshot() (int, []int) {
@@ -239,7 +256,9 @@ func TestStartTicksRepeatedly(t *testing.T) {
 	waitFor(t, func() bool { c, _ := store.snapshot(); return c >= 3 })
 }
 
-func TestStartDisabledDoesNotSpawnLoop(t *testing.T) {
+// With the heartbeat window disabled the loop still runs (the expired-credential
+// pass has no window), but it must never touch the heartbeats.
+func TestStartWithHeartbeatWindowDisabledDeletesNoHeartbeats(t *testing.T) {
 	store := &fakeStore{}
 	p := New(Options{
 		Store:         store,
@@ -252,6 +271,42 @@ func TestStartDisabledDoesNotSpawnLoop(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	if calls, _ := store.snapshot(); calls != 0 {
 		t.Fatalf("disabled pruner called store %d times, want 0", calls)
+	}
+}
+
+// TestExpiredCredentialsAreReapedOnEveryPass pins the fourth pass. Expired
+// sessions, password-reset tokens and WebAuthn challenges were never deleted
+// by anything: every login added a session row that outlived its expiry
+// forever, so the table grew with the age of the instance and every row of it
+// went into each backup.
+//
+// It runs even with every retention window switched off — those windows are
+// about history an operator may want to keep, and an expired credential is not
+// history anyone needs.
+func TestExpiredCredentialsAreReapedOnEveryPass(t *testing.T) {
+	store := &fakeStore{expiredDeleted: 3}
+	p := New(Options{Store: store, Interval: time.Hour, Logger: quietLogger()})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p.Start(ctx)
+	waitFor(t, func() bool { return store.expiredSnapshot() >= 1 })
+	if calls, _ := store.snapshot(); calls != 0 {
+		t.Fatalf("heartbeat prune ran %d times with its window disabled", calls)
+	}
+}
+
+// A failing reaper is one table's problem, not the other three passes'.
+func TestAFailingReaperDoesNotStopTheOthers(t *testing.T) {
+	store := &fakeStore{expiredErr: errAny}
+	p := New(Options{Store: store, RetentionDays: 30, DeliveryRetentionDays: 30, TrashRetentionDays: 30,
+		Logger: quietLogger(), Now: fixedNow(time.Now())})
+	p.runOnce(context.Background())
+	calls, _ := store.snapshot()
+	deliveries, _ := store.deliverySnapshot()
+	bins, _ := store.binSnapshot()
+	if calls != 1 || deliveries != 1 || bins != 1 || store.expiredSnapshot() != 1 {
+		t.Fatalf("passes run: heartbeats %d, deliveries %d, bin %d, expired %d; want 1 each",
+			calls, deliveries, bins, store.expiredSnapshot())
 	}
 }
 
@@ -525,6 +580,9 @@ func TestAPanicInOnePassDoesNotStopTheOthers(t *testing.T) {
 	if store.binCalls == 0 {
 		t.Error("the recycle bin was not swept after the heartbeat pass panicked")
 	}
+	if store.expiredCalls == 0 {
+		t.Error("expired credentials were not reaped after the heartbeat pass panicked")
+	}
 	// And the next tick still runs, rather than the job being dead.
 	p.runOnce(context.Background())
 	if store.deliveryCalls != 2 || store.binCalls != 2 {
@@ -537,6 +595,7 @@ func TestAPanicInOnePassDoesNotStopTheOthers(t *testing.T) {
 type panickingStore struct {
 	deliveryCalls int
 	binCalls      int
+	expiredCalls  int
 }
 
 func (s *panickingStore) PruneBefore(context.Context, time.Time) (int64, error) {
@@ -551,4 +610,9 @@ func (s *panickingStore) PruneDeliveriesBefore(context.Context, time.Time) (int6
 func (s *panickingStore) PruneBin(context.Context, int) ([]PrunedMonitor, error) {
 	s.binCalls++
 	return nil, nil
+}
+
+func (s *panickingStore) PruneExpired(context.Context) (int64, error) {
+	s.expiredCalls++
+	return 0, nil
 }
