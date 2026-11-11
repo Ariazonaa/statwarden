@@ -438,6 +438,7 @@ export const en = {
 		'The badge URLs stop working immediately. Anything embedding them shows a broken image.',
 	'monitorDetail.badgeRevoked': 'Badge revoked',
 	'monitorDetail.badgeRevokeError': 'Could not revoke the badge.',
+	'monitorDetail.chartError': 'Could not load the response-time chart.',
 	'monitorDetail.badgeStatusLabel': 'Status badge',
 	'monitorDetail.badgeUptimeLabel': 'Uptime badge',
 	'monitorDetail.badgeUrl': 'URL',
