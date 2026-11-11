@@ -44,6 +44,7 @@
 	let settings = $state<Settings | undefined>(undefined);
 	let sessions = $state<Session[]>([]);
 	let keys = $state<ApiKey[]>([]);
+	let settingsFailed = $state(false);
 	let savingSettings = $state(false);
 	let savingTtl = $state(false);
 
@@ -158,11 +159,23 @@
 			.version()
 			.then((v) => (version = v))
 			.catch(() => (version = undefined));
-		[settings, sessions, keys] = await Promise.all([
-			api.getSettings(),
-			api.listSessions(),
-			api.listApiKeys()
-		]);
+		// Three independent loads, not one Promise.all. GET /settings is
+		// admin-only, so for everyone else the 403 rejected the whole batch and the
+		// sessions and API keys they are entitled to manage never appeared.
+		if (session.isAdmin) {
+			api
+				.getSettings()
+				.then((s) => (settings = s))
+				.catch(() => (settingsFailed = true));
+		}
+		api
+			.listSessions()
+			.then((s) => (sessions = s))
+			.catch(() => toast.error(t('common.loadError')));
+		api
+			.listApiKeys()
+			.then((k) => (keys = k))
+			.catch(() => toast.error(t('common.loadError')));
 	});
 
 	// Short retention is expressed in days; longer horizons read better in years.
@@ -469,30 +482,35 @@
 <SettingsShell {sections}>
 	{#snippet children(current: string)}
 		{#if current === 'general'}
-			<GlassCard>
-				{#if !settings}
-					<Skeleton lines={3} />
-				{:else}
-					<div class="grid">
-						<TextField label={t('settings.instanceName')} bind:value={settings.instanceName} />
-						<TextField label={t('settings.baseUrl')} bind:value={settings.baseUrl} />
-						<div class="field">
-							<Select
-								label={t('settings.retention')}
-								value={String(settings.retentionDays)}
-								options={retentionOptions}
-								onchange={(v) => settings && (settings.retentionDays = Number(v))}
-							/>
-							<p class="hint">{t('settings.retentionHelp')}</p>
+			<!-- Instance settings are admin-only on the server, read and write. -->
+			{#if session.isAdmin}
+				<GlassCard>
+					{#if settingsFailed}
+						<p class="muted">{t('common.loadError')}</p>
+					{:else if !settings}
+						<Skeleton lines={3} />
+					{:else}
+						<div class="grid">
+							<TextField label={t('settings.instanceName')} bind:value={settings.instanceName} />
+							<TextField label={t('settings.baseUrl')} bind:value={settings.baseUrl} />
+							<div class="field">
+								<Select
+									label={t('settings.retention')}
+									value={String(settings.retentionDays)}
+									options={retentionOptions}
+									onchange={(v) => settings && (settings.retentionDays = Number(v))}
+								/>
+								<p class="hint">{t('settings.retentionHelp')}</p>
+							</div>
 						</div>
-					</div>
-					<div class="save">
-						<PillButton loading={savingSettings} onclick={saveSettings}
-							>{t('settings.saveChanges')}</PillButton
-						>
-					</div>
-				{/if}
-			</GlassCard>
+						<div class="save">
+							<PillButton loading={savingSettings} onclick={saveSettings}
+								>{t('settings.saveChanges')}</PillButton
+							>
+						</div>
+					{/if}
+				</GlassCard>
+			{/if}
 
 			<GlassCard title={t('settings.languageRegion')} subtitle={t('settings.languageRegionSub')}>
 				<div class="grid">

@@ -11,6 +11,7 @@ export const de: Messages = {
 	'common.cancel': 'Abbrechen',
 	'common.continue': 'Weiter',
 	'common.error': 'Da ist etwas schiefgelaufen.',
+	'common.loadError': 'Das konnte nicht geladen werden. Bitte versuche es erneut.',
 	'common.delete': 'Löschen',
 	'common.remove': 'Entfernen',
 	'common.edit': 'Bearbeiten',
