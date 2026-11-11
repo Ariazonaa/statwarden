@@ -427,7 +427,16 @@
 		}
 	}
 
+	/**
+	 * Identifies the newest openManage. Closing one page's dialog and opening
+	 * another's before the first fetch returned let the late response land on
+	 * top: the second page's dialog listed the first page's incidents, and its
+	 * layout tab reordered the wrong page.
+	 */
+	let manageSeq = 0;
+
 	async function openManage(p: StatusPage) {
+		const seq = ++manageSeq;
 		managePage = p;
 		manageTab = 'incidents';
 		manageOpen = true;
@@ -435,7 +444,15 @@
 		// The list response may predate the last save, and group rows — hence
 		// group ids — are recreated on every save, so the layout tab has to work
 		// from a freshly fetched page or its very first reorder 409s.
-		const [inc, fresh] = await Promise.all([api.listIncidents(p.id), api.getStatusPage(p.id)]);
+		let inc: Incident[];
+		let fresh: StatusPage;
+		try {
+			[inc, fresh] = await Promise.all([api.listIncidents(p.id), api.getStatusPage(p.id)]);
+		} catch {
+			if (seq === manageSeq) toast.error(t('common.loadError'));
+			return;
+		}
+		if (seq !== manageSeq) return;
 		// Drop drafts that match what the server had when they were seeded, i.e.
 		// ones the operator opened and never typed into.
 		//
