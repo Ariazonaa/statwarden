@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1104,5 +1105,69 @@ func TestConcurrentOIDCStartsShareNoMutableState(t *testing.T) {
 	}
 	if !strings.Contains(scopes[0], "openid") {
 		t.Fatalf("scope = %q, must always include openid", scopes[0])
+	}
+}
+
+// Some providers (Amazon Cognito among them) send email_verified as the STRING
+// "true" or "false". Decoding it into a bool failed the whole ID token, so on
+// such a provider every single sign-on failed — not just provisioning, but the
+// login of every already-linked account too.
+func TestOIDCAcceptsEmailVerifiedAsAString(t *testing.T) {
+	for _, tc := range []struct {
+		value     any
+		provision bool
+	}{
+		{"true", true},
+		{"TRUE", true},
+		{"false", false},
+		{"yes", false}, // not a spelling the claim uses; unverified is the safe reading
+	} {
+		t.Run(fmt.Sprint(tc.value), func(t *testing.T) {
+			h := newOIDCHarness(t, func(p *OIDCProvider) { p.AutoProvision = true })
+			h.setupAdmin()
+			h.idp.claims["email_verified"] = tc.value
+			rec := h.login(nil)
+			if got := hasSessionCookie(rec); got != tc.provision {
+				t.Fatalf("email_verified=%q: signed in = %v, want %v (error %q)",
+					tc.value, got, tc.provision, errorCodeOf(t, rec))
+			}
+			if !tc.provision {
+				if got := errorCodeOf(t, rec); got != oidcErrFailed {
+					t.Errorf("error code = %q, want %q", got, oidcErrFailed)
+				}
+			}
+		})
+	}
+}
+
+// The username of a provisioned account is derived from the address's local
+// part, and the unique index on usernames answered a collision with the same
+// ErrConflict as a taken address. sso-user@example.com and a local account that
+// happened to be called "ssouser" were enough to refuse that person with
+// "address already taken" on every attempt, forever, with nothing to fix.
+func TestOIDCProvisioningSurvivesAUsernameCollision(t *testing.T) {
+	h := newOIDCHarness(t, func(p *OIDCProvider) { p.AutoProvision = true })
+	admin := h.setupAdmin()
+	rec := h.requestWith(http.MethodPost, "/api/v1/users", createUserRequest{
+		Email: "someone-else@example.com", Username: deriveUsername("sso-user@example.com"),
+		Password: "supersecret", Role: "viewer",
+	}, admin)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create the colliding user = %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	rec = h.login(nil)
+	if !hasSessionCookie(rec) {
+		t.Fatalf("provisioning failed on a username collision, error=%q", errorCodeOf(t, rec))
+	}
+	u, err := h.store.GetCredentialsByEmail(t.Context(), "sso-user@example.com")
+	if err != nil {
+		t.Fatalf("the provisioned account does not exist: %v", err)
+	}
+	if u.Username == deriveUsername("sso-user@example.com") {
+		t.Fatalf("the provisioned account took the colliding username %q", u.Username)
+	}
+	if !strings.HasPrefix(u.Username, deriveUsername("sso-user@example.com")) {
+		t.Errorf("username %q no longer resembles the address", u.Username)
 	}
 }

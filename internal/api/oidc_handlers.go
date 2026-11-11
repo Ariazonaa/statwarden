@@ -2,9 +2,11 @@ package api
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -375,19 +377,42 @@ func (s *server) provisionOIDCUser(w http.ResponseWriter, r *http.Request, p *OI
 	// well-formed argon2id value, so a password login against such an account
 	// gets the same generic 401 as a wrong password.
 	// The provisioned account needs a login username too; derive one from the
-	// verified address. The unique index still guards it — a collision surfaces
-	// as ErrConflict and the same refusal as a taken address.
+	// verified address.
+	//
+	// The username is only derived, so a collision on it must not be the end.
+	// The store answers a taken username with the same ErrConflict as a taken
+	// address, and refusing on the first one locked out, permanently and as
+	// "address already taken", anyone whose local part happened to match an
+	// existing username (alice@one.example vs a local "alice"). On a conflict
+	// the insert is retried with a random suffix on the username. A taken
+	// ADDRESS conflicts on every attempt, so it still ends in the refusal below —
+	// and this file still never looks an account up by address to tell the two
+	// apart.
 	//
 	// The user row and the identity are written together. As two calls, a
 	// failure or a crash between them left an account with no password and no
 	// identity — impossible to log into, yet holding the address and username,
 	// so every later attempt by the same person was refused as "address already
 	// taken" and nothing pointed at why.
-	u, err := s.store.CreateUserWithIdentity(r.Context(), email, deriveUsername(email),
-		displayName, role, ExternalIdentity{
-			Provider: p.ID, Issuer: claims.Iss, Subject: claims.Sub,
-			Email: claims.Email, DisplayName: claims.Name,
-		})
+	identity := ExternalIdentity{
+		Provider: p.ID, Issuer: claims.Iss, Subject: claims.Sub,
+		Email: claims.Email, DisplayName: claims.Name,
+	}
+	base := deriveUsername(email)
+	username := base
+	var u User
+	var err error
+	for attempt := 0; ; attempt++ {
+		u, err = s.store.CreateUserWithIdentity(r.Context(), email, username, displayName, role, identity)
+		if !errors.Is(err, ErrConflict) || attempt == oidcUsernameRetries {
+			break
+		}
+		suffix, serr := randomUsernameSuffix()
+		if serr != nil {
+			break
+		}
+		username = base + "-" + suffix
+	}
 	if err != nil {
 		if errors.Is(err, ErrConflict) {
 			// The address already belongs to a local account. This is exactly the
@@ -540,4 +565,20 @@ func (s *server) handleUnlinkIdentity(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r.Context(), &p.userID, "user.identity.unlink", "user", &p.userID, clientIP(r), nil)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// oidcUsernameRetries is how many suffixed usernames provisioning tries after
+// the derived one is taken. Each suffix carries 24 random bits, so a second
+// collision is already unlikely; the bound only keeps a taken address — which
+// conflicts every time — from looping.
+const oidcUsernameRetries = 3
+
+// randomUsernameSuffix returns six lowercase hex characters, inside the
+// username alphabet.
+func randomUsernameSuffix() (string, error) {
+	b := make([]byte, 3)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
