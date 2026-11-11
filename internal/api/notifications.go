@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -168,10 +169,38 @@ func (s *server) handleTestNotification(w http.ResponseWriter, r *http.Request) 
 		Active: n.Active,
 	})
 	if err != nil {
-		writeProblemDetail(w, http.StatusBadGateway, "test send failed: "+err.Error())
+		writeTestSendProblem(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
+}
+
+// writeTestSendProblem answers a failed test send with a failure class and the
+// dispatcher's redacted message.
+//
+// It used to answer "test send failed: " + the raw provider error. For every
+// provider with a credential in its URL — a Telegram bot token, a Slack or
+// Discord webhook secret, an ntfy topic — net/http's error quotes that URL, so
+// the endpoint handed the secret back to anyone allowed to press "test", which
+// is a wider audience than may read the stored configuration (reads redact it).
+// The dispatcher now strips request URLs to their host before the error leaves
+// it; error_class lets a client say what kind of failure it was without parsing
+// prose.
+func writeTestSendProblem(w http.ResponseWriter, err error) {
+	class := notify.ErrorClass(err)
+	if errors.Is(err, notify.ErrStopped) {
+		writeProblemDetail(w, http.StatusServiceUnavailable, "notification dispatcher is shutting down")
+		return
+	}
+	w.Header().Set("Content-Type", "application/problem+json; charset=utf-8")
+	w.WriteHeader(http.StatusBadGateway)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"type":        "about:blank",
+		"title":       http.StatusText(http.StatusBadGateway),
+		"status":      http.StatusBadGateway,
+		"detail":      "test send failed (" + class + "): " + err.Error(),
+		"error_class": class,
+	})
 }
 
 // validateNotification checks the provider type is registered and its config

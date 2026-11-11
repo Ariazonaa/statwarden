@@ -25,6 +25,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/Ariazonaa/statwarden/internal/domain"
+	"github.com/Ariazonaa/statwarden/internal/notify/redact"
 	"github.com/Ariazonaa/statwarden/internal/notify/registry"
 	"github.com/Ariazonaa/statwarden/internal/safego"
 )
@@ -1747,7 +1748,7 @@ func (d *Dispatcher) sendOne(ctx context.Context, n Notification, ev domain.Noti
 	attempts := 0
 	notifier, ok := d.reg.Get(n.Type)
 	if !ok {
-		err = fmt.Errorf("unknown provider type %q", n.Type)
+		err = fmt.Errorf("%w %q", ErrUnknownProvider, n.Type)
 	} else {
 		for attempts < d.sendAttempts {
 			attempts++
@@ -1764,6 +1765,11 @@ func (d *Dispatcher) sendOne(ctx context.Context, n Notification, ev domain.Noti
 			}
 		}
 	}
+	// Before the error is written anywhere. Below it goes to the log, to the
+	// delivery audit log, and back to the caller — which for a test send is the
+	// API response. A provider error routinely quotes the request URL, and for
+	// half the providers the URL is where the credential lives.
+	err = redact.Error(err, configURLs(n.Config)...)
 
 	delivery := Delivery{
 		NotificationID: n.ID,

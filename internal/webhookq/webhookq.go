@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Ariazonaa/statwarden/internal/notify/redact"
 	"github.com/Ariazonaa/statwarden/internal/safego"
 )
 
@@ -355,7 +356,7 @@ func (q *Queue[T]) Deliver(ctx context.Context, url, secret string, p T) error {
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return redact.Error(err, url)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", q.userAgent)
@@ -364,7 +365,10 @@ func (q *Queue[T]) Deliver(ctx context.Context, url, secret string, p T) error {
 	}
 	resp, err := q.client.Do(req)
 	if err != nil {
-		return err
+		// Both callers write this down: the queue logs it and a "test this URL"
+		// button shows it. A collector URL can carry its credential in the path
+		// or query, and net/http quotes the whole URL in a transport error.
+		return redact.Error(err, url)
 	}
 	defer resp.Body.Close() //nolint:errcheck // best-effort close
 	if resp.StatusCode >= 300 {
