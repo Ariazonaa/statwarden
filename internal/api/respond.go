@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"strconv"
 
@@ -86,6 +87,26 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		writeProblemDetail(w, http.StatusBadRequest,
 			"invalid JSON body: unexpected data after the JSON value")
+		return false
+	}
+	return true
+}
+
+// requireJSONContentType answers 415 and returns false unless the request is
+// labelled application/json (parameters such as charset are fine).
+//
+// decodeJSON itself reads any body as JSON, whatever the label, and that is
+// harmless behind the CSRF check. The public auth endpoints are in front of it —
+// there is no session yet to bind a token to — and there it is login CSRF: a
+// cross-site <form enctype="text/plain"> can be shaped into a valid JSON object,
+// and as a "simple" request the browser sends it without a CORS preflight, so a
+// foreign page could sign its visitor into an account of the page's choosing.
+// application/json is not a simple content type; a cross-origin fetch carrying
+// it is preflighted, and the preflight fails.
+func requireJSONContentType(w http.ResponseWriter, r *http.Request) bool {
+	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mt != "application/json" {
+		writeProblemDetail(w, http.StatusUnsupportedMediaType, "the request body must be sent as application/json")
 		return false
 	}
 	return true

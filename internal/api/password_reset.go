@@ -48,6 +48,10 @@ func (s *server) handleRequestPasswordReset(w http.ResponseWriter, r *http.Reque
 		writeProblemDetail(w, http.StatusTooManyRequests, "too many reset requests, slow down")
 		return
 	}
+	// Cross-site forms must not be able to trigger reset mail either.
+	if !requireJSONContentType(w, r) {
+		return
+	}
 	var req passwordResetRequest
 	if !decodeJSON(w, r, &req) {
 		return
@@ -171,6 +175,9 @@ func (s *server) sendPasswordResetMail(ctx context.Context, email, token string)
 func (s *server) handleConfirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 	if !s.loginLimiter.allow("reset-confirm:" + rateLimitAddr(clientIP(r))) {
 		writeProblemDetail(w, http.StatusTooManyRequests, "too many attempts, slow down")
+		return
+	}
+	if !requireJSONContentType(w, r) {
 		return
 	}
 	var req passwordResetConfirmRequest

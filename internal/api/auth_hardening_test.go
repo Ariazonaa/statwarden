@@ -3,7 +3,9 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -314,4 +316,50 @@ func (c *steppingClock) nextCode(t *testing.T, secret string) string {
 		t.Fatalf("TOTPCode: %v", err)
 	}
 	return code
+}
+
+// Login CSRF. The public auth endpoints sit outside the CSRF check — there is no
+// session yet to bind a token to — and decodeJSON reads any body as JSON whatever
+// it is labelled. A cross-site <form enctype="text/plain"> can be shaped into a
+// valid JSON object and is a "simple" request the browser sends without a CORS
+// preflight, so any page could sign a visitor into an account of the page's
+// choosing. Requiring application/json forces a preflight, which a foreign
+// origin does not pass.
+func TestPublicAuthEndpointsRequireAJSONContentType(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin()
+
+	body := `{"email":"admin@example.com","password":"supersecret"}`
+	for _, path := range []string{
+		"/api/v1/auth/login",
+		"/api/v1/setup",
+		"/api/v1/auth/password-reset",
+		"/api/v1/auth/password-reset/confirm",
+	} {
+		for _, ct := range []string{"text/plain", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x", ""} {
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+			if ct != "" {
+				req.Header.Set("Content-Type", ct)
+			}
+			rec := httptest.NewRecorder()
+			h.handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnsupportedMediaType {
+				t.Errorf("POST %s as %q = %d, want 415", path, ct, rec.Code)
+			}
+			for _, c := range rec.Result().Cookies() {
+				if c.Name == sessionCookie && c.Value != "" {
+					t.Errorf("POST %s as %q issued a session", path, ct)
+				}
+			}
+		}
+	}
+
+	// A parameterised JSON media type is still JSON.
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	rec := httptest.NewRecorder()
+	h.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login as application/json; charset=utf-8 = %d, want 200", rec.Code)
+	}
 }
