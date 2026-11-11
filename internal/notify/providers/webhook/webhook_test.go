@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,6 +67,31 @@ func TestSend(t *testing.T) {
 	}
 	if gotAuth != "Bearer t" {
 		t.Fatalf("custom header not sent: %q", gotAuth)
+	}
+}
+
+// A webhook URL is often its own credential (a secret path segment, a token in
+// the query), so the provider's errors name the host and nothing more — on a
+// non-2xx answer as well as on a transport failure.
+func TestErrorsDoNotRepeatTheURL(t *testing.T) {
+	const secret = "s3cr3t-hook-path"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	for _, target := range []string{
+		srv.URL + "/hooks/" + secret + "?token=" + secret, // answers 500
+		"http://127.0.0.1:1/hooks/" + secret,              // refuses the connection
+	} {
+		cfg, _ := json.Marshal(Config{URL: target})
+		err := New().Send(t.Context(), cfg, domain.NotificationEvent{Kind: domain.EventKindTest})
+		if err == nil {
+			t.Fatalf("Send to %s succeeded", target)
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("error repeats the URL's secret: %v", err)
+		}
 	}
 }
 
