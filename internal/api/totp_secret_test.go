@@ -80,7 +80,8 @@ func TestTOTPSecretSealedAtRest(t *testing.T) {
 
 	// And the LOGIN path opens it too — the read that is easiest to forget,
 	// because it lives in auth_handlers.go rather than the enrolment handlers.
-	fresh, err := auth.TOTPCode(secret, time.Now())
+	// The next step's code: the one that finished enrolment is spent.
+	fresh, err := auth.TOTPCode(secret, time.Now().Add(30*time.Second))
 	if err != nil {
 		t.Fatalf("TOTPCode: %v", err)
 	}
@@ -104,7 +105,10 @@ func TestTOTPLegacyPlaintextSecretStillAuthenticates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new box: %v", err)
 	}
-	h := newHarnessWithBox(t, box)
+	// Three codes are used below, and each is single-use, so the server clock
+	// steps forward between them.
+	clk := newSteppingClock()
+	h := newHarnessTweaked(t, func(o *Options) { o.SecretsBox = box; o.Now = clk.now })
 	admin := h.setupAdmin()
 
 	// A pre-migration row: the base32 secret written straight into the column,
@@ -117,10 +121,7 @@ func TestTOTPLegacyPlaintextSecretStillAuthenticates(t *testing.T) {
 		t.Fatalf("seed legacy secret: %v", err)
 	}
 
-	code, err := auth.TOTPCode(legacy, time.Now())
-	if err != nil {
-		t.Fatalf("TOTPCode: %v", err)
-	}
+	code := clk.nextCode(t, legacy)
 	if _, c := h.login("admin@example.com", "supersecret", code); c != http.StatusOK {
 		t.Fatalf("login against a legacy plaintext secret = %d, want 200", c)
 	}
@@ -128,10 +129,7 @@ func TestTOTPLegacyPlaintextSecretStillAuthenticates(t *testing.T) {
 	// The next write upgrades the row without changing the secret. Regenerating
 	// backup codes takes the second factor away from whoever holds the old
 	// ones, so it re-authenticates: with 2FA on, that means a code as well.
-	stepUpCode, err := auth.TOTPCode(legacy, time.Now())
-	if err != nil {
-		t.Fatalf("TOTPCode: %v", err)
-	}
+	stepUpCode := clk.nextCode(t, legacy)
 	rec := h.requestWith(http.MethodPost, "/api/v1/me/totp/backup-codes",
 		stepUp{Password: "supersecret", TOTPCode: stepUpCode}, admin)
 	if rec.Code != http.StatusOK {
@@ -144,10 +142,7 @@ func TestTOTPLegacyPlaintextSecretStillAuthenticates(t *testing.T) {
 	if strings.Contains(stored, legacy) {
 		t.Fatalf("the legacy plaintext survives in the column: %q", stored)
 	}
-	fresh, err := auth.TOTPCode(legacy, time.Now())
-	if err != nil {
-		t.Fatalf("TOTPCode: %v", err)
-	}
+	fresh := clk.nextCode(t, legacy)
 	if _, c := h.login("admin@example.com", "supersecret", fresh); c != http.StatusOK {
 		t.Fatalf("login after the re-seal = %d, want 200 (the secret must be unchanged)", c)
 	}

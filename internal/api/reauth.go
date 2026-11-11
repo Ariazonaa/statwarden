@@ -127,7 +127,7 @@ func (s *server) consumeSecondFactor(r *http.Request, creds Credentials, code st
 	if code == "" {
 		return false
 	}
-	if auth.VerifyTOTP(creds.TOTPSecret, code, s.now()) {
+	if s.verifyTOTPOnce(creds.ID, creds.TOTPSecret, code) {
 		return true
 	}
 	remaining, ok := auth.ConsumeBackupCode(creds.BackupCodes, code)

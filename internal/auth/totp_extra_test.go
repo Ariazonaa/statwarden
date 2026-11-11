@@ -91,3 +91,32 @@ func TestConsumeBackupCodeAcceptsTheObviousSpellings(t *testing.T) {
 		t.Fatal("a truncated code was accepted")
 	}
 }
+
+// VerifyTOTPStep reports WHICH time step a code matched, because rejecting a
+// replay needs it: a code stays valid across the skew window, so "this code
+// verified" alone cannot tell a second use of the same code from a new one.
+func TestVerifyTOTPStepReportsTheMatchedStep(t *testing.T) {
+	secret, err := NewTOTPSecret()
+	if err != nil {
+		t.Fatalf("NewTOTPSecret: %v", err)
+	}
+	now := time.Unix(1_700_000_010, 0)
+	current := uint64(now.Unix()) / 30
+	for _, delta := range []int{-1, 0, 1} {
+		at := now.Add(time.Duration(delta) * 30 * time.Second)
+		code, err := TOTPCode(secret, at)
+		if err != nil {
+			t.Fatalf("TOTPCode: %v", err)
+		}
+		step, ok := VerifyTOTPStep(secret, code, now)
+		if !ok {
+			t.Fatalf("code for step %+d did not verify", delta)
+		}
+		if want := uint64(int64(current) + int64(delta)); step != want {
+			t.Errorf("code for step %+d matched step %d, want %d", delta, step, want)
+		}
+	}
+	if _, ok := VerifyTOTPStep(secret, "not-a-code", now); ok {
+		t.Fatal("garbage verified")
+	}
+}

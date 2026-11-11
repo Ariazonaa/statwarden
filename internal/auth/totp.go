@@ -63,10 +63,23 @@ func TOTPCode(secret string, t time.Time) (string, error) {
 
 // VerifyTOTP reports whether code is valid for secret at time now, tolerating
 // one step of clock skew on either side. Comparison is constant-time.
+//
+// It says nothing about whether the code was used before; a caller that
+// authenticates with it needs VerifyTOTPStep and a record of the last step.
 func VerifyTOTP(secret, code string, now time.Time) bool {
+	_, ok := VerifyTOTPStep(secret, code, now)
+	return ok
+}
+
+// VerifyTOTPStep is VerifyTOTP that also reports the time step the code
+// matched. A code is valid for three consecutive steps, so rejecting a replay
+// (RFC 6238 §5.2) means remembering the last ACCEPTED step per account and
+// refusing any code whose step is not later than it — which needs the step,
+// not just the yes/no.
+func VerifyTOTPStep(secret, code string, now time.Time) (uint64, bool) {
 	key, err := base32NoPad.DecodeString(strings.ToUpper(strings.TrimSpace(secret)))
 	if err != nil {
-		return false
+		return 0, false
 	}
 	// An empty key is refused HERE, not left to the callers.
 	//
@@ -86,7 +99,7 @@ func VerifyTOTP(secret, code string, now time.Time) bool {
 	// says a caller-side check "is not redundant", which is the same observation
 	// from the other end.
 	if len(key) == 0 {
-		return false
+		return 0, false
 	}
 	code = strings.TrimSpace(code)
 	step := uint64(totpPeriod.Seconds())
@@ -99,10 +112,10 @@ func VerifyTOTP(secret, code string, now time.Time) bool {
 			c += uint64(delta)
 		}
 		if subtle.ConstantTimeCompare([]byte(hotp(key, c)), []byte(code)) == 1 {
-			return true
+			return c, true
 		}
 	}
-	return false
+	return 0, false
 }
 
 // hotp is the RFC 4226 HMAC-based one-time password used as TOTP's core.

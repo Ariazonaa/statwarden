@@ -220,6 +220,8 @@ type server struct {
 	lockout       *lockout
 	// pagePw bounds and locks out page-password checks (statuspages_password.go).
 	pagePw passwordGuard
+	// totpReplay refuses a second use of the same authenticator code.
+	totpReplay totpReplayGuard
 
 	// openapi lazily renders the embedded API description for /openapi.json.
 	openapi openapiDoc

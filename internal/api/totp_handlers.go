@@ -90,7 +90,7 @@ func (s *server) handleTOTPVerify(w http.ResponseWriter, r *http.Request) {
 	if s.reauthLocked(w, p.userID) {
 		return
 	}
-	if !auth.VerifyTOTP(creds.TOTPSecret, req.Code, s.now()) {
+	if !s.verifyTOTPOnce(p.userID, creds.TOTPSecret, req.Code) {
 		s.reauthFailed(r, p.userID)
 		writeProblemDetail(w, http.StatusBadRequest, "code did not verify")
 		return
