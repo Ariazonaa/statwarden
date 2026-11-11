@@ -492,6 +492,25 @@ func run() error {
 		wd := push.NewWatchdog(pushOpts)
 		safego.Go(logger, "push watchdog", func() { wd.Run(ctx, pushWatchdogInterval) })
 
+		// Retention: prune heartbeats older than HEARTBEAT_RETENTION_DAYS, the
+		// delivery log older than DELIVERY_RETENTION_DAYS, and the monitor
+		// recycle bin older than TRASH_RETENTION_DAYS. One job, three windows —
+		// the tables answer different questions and are kept for different
+		// reasons. Self-contained goroutine that stops with ctx.
+		pruner := retention.New(retention.Options{
+			Store:                 retention.NewPgStore(pool),
+			RetentionDays:         cfg.HeartbeatRetentionDays,
+			DeliveryRetentionDays: cfg.DeliveryRetentionDays,
+			TrashRetentionDays:    cfg.TrashRetentionDays,
+			// The runtime override the settings screen writes. Without this the
+			// whole control was inert: validated, stored, displayed, and read by
+			// nobody, while its help text promised an irreversible delete.
+			DaysFunc: func(c context.Context) (int, error) {
+				return api.RuntimeRetentionDays(c, store)
+			},
+			Logger: logger,
+		})
+
 		// Reporting service plus the periodic hourly/daily rollup job.
 		reportSvc = report.NewService(report.NewPgStore(pool), nil)
 		safego.Go(logger, "rollup job", func() { runRollups(ctx, reportSvc, logger) })
@@ -500,8 +519,18 @@ func run() error {
 		// or a spell where it was down — would otherwise never get rollups, and
 		// every long-range read would scan raw beats forever. Idempotent, and off
 		// the startup path so it never delays serving.
+		//
+		// The window is the one the PRUNER applies, Settings override included,
+		// not HEARTBEAT_RETENTION_DAYS: those differ whenever an admin changed
+		// retention at runtime, and a shorter override meant the backfill reached
+		// into days whose raw beats were already gone.
 		safego.Go(logger, "rollup backfill", func() {
-			since := time.Now().AddDate(0, 0, -cfg.HeartbeatRetentionDays)
+			days, err := pruner.EffectiveDays(ctx)
+			if err != nil {
+				logger.Error("heartbeat rollup backfill skipped: the retention window could not be read", "error", err)
+				return
+			}
+			since := time.Now().AddDate(0, 0, -days)
 			if err := reportSvc.Backfill(ctx, since); err != nil {
 				logger.Error("heartbeat rollup backfill failed", "error", err)
 			} else {
@@ -542,24 +571,8 @@ func run() error {
 		})
 		safego.Go(logger, "certificate sweeper", func() { sweeper.Run(ctx) })
 
-		// Retention: prune heartbeats older than HEARTBEAT_RETENTION_DAYS, the
-		// delivery log older than DELIVERY_RETENTION_DAYS, and the monitor
-		// recycle bin older than TRASH_RETENTION_DAYS. One job, three windows —
-		// the tables answer different questions and are kept for different
-		// reasons. Self-contained goroutine that stops with ctx.
-		retention.New(retention.Options{
-			Store:                 retention.NewPgStore(pool),
-			RetentionDays:         cfg.HeartbeatRetentionDays,
-			DeliveryRetentionDays: cfg.DeliveryRetentionDays,
-			TrashRetentionDays:    cfg.TrashRetentionDays,
-			// The runtime override the settings screen writes. Without this the
-			// whole control was inert: validated, stored, displayed, and read by
-			// nobody, while its help text promised an irreversible delete.
-			DaysFunc: func(c context.Context) (int, error) {
-				return api.RuntimeRetentionDays(c, store)
-			},
-			Logger: logger,
-		}).Start(ctx)
+		// Built above, next to the backfill that shares its window.
+		pruner.Start(ctx)
 
 		// Scheduled pg_dump backups, opt-in via BACKUP_ENABLED. Inside the
 		// database branch because the job dumps that database; DEV_MODE has

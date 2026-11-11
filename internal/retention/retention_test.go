@@ -126,6 +126,41 @@ func TestPruneComputesCutoffFromRetentionDays(t *testing.T) {
 	}
 }
 
+// TestEffectiveDaysIsTheWindowThePrunerUses pins the one place other jobs learn
+// the heartbeat window. The rollup backfill used HEARTBEAT_RETENTION_DAYS while
+// the pruner obeyed the Settings override, and the mismatch is what let the
+// backfill reach into pruned days.
+func TestEffectiveDaysIsTheWindowThePrunerUses(t *testing.T) {
+	override := func(d int, err error) func(context.Context) (int, error) {
+		return func(context.Context) (int, error) { return d, err }
+	}
+	for _, tc := range []struct {
+		name    string
+		env     int
+		fn      func(context.Context) (int, error)
+		want    int
+		wantErr bool
+	}{
+		{"no override source", 180, nil, 180, false},
+		{"no override set", 180, override(0, nil), 180, false},
+		{"shorter override wins", 180, override(30, nil), 30, false},
+		{"longer override wins", 30, override(400, nil), 400, false},
+		{"override clamped", 30, override(99999, nil), 3650, false},
+		{"unreadable override is an error, not the env value", 180, override(0, errAny), 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := New(Options{Store: &fakeStore{}, RetentionDays: tc.env, DaysFunc: tc.fn, Logger: quietLogger()})
+			got, err := p.EffectiveDays(context.Background())
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Fatalf("EffectiveDays = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPruneDisabledWhenRetentionNonPositive(t *testing.T) {
 	for _, days := range []int{0, -5} {
 		store := &fakeStore{deleted: 99}

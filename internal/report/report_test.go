@@ -577,6 +577,97 @@ func TestBackfillMakesSeriesReadFromRollups(t *testing.T) {
 	}
 }
 
+// TestBackfillKeepsRollupsWhoseRawBeatsWerePruned is the corruption the
+// backfill caused whenever its window reached past what retention had kept.
+//
+// The startup backfill covered HEARTBEAT_RETENTION_DAYS, but the pruner obeys
+// the runtime override from Settings. With the override shorter (30 against
+// 180, say), the raw beats of the day at the prune cutoff were partly gone —
+// the cutoff is an arbitrary instant — and the backfill re-aggregated what was
+// left and REPLACED that day's correct rollup with the partial count, on every
+// restart. A bucket recomputed from fewer beats than its stored rollup counted
+// can only mean the raw data was pruned, so the stored one wins.
+func TestBackfillKeepsRollupsWhoseRawBeatsWerePruned(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 3, 12, 9, 37, 13, 0, time.UTC)
+	full := seedUptimeWeek(now)
+	if err := NewService(full, func() time.Time { return now }).Backfill(ctx, now.AddDate(0, 0, -8)); err != nil {
+		t.Fatalf("Backfill (full): %v", err)
+	}
+
+	// The same instance after retention pruned at an instant three days back:
+	// rollups intact, raw beats only from the cutoff on.
+	cutoff := now.AddDate(0, 0, -3)
+	pruned := NewMemStore()
+	pruned.AddMonitor(MonitorRef{ID: 1, Name: "web", Type: "http"})
+	beats, _ := full.HeartbeatsInRange(ctx, 1, now.AddDate(0, 0, -8), now)
+	for _, hb := range beats {
+		if !hb.CheckedAt.Before(cutoff) {
+			pruned.AddHeartbeat(hb)
+		}
+	}
+	for _, b := range []Bucket{Hourly, Daily} {
+		if err := pruned.UpsertRollups(ctx, b, full.Rollups(b)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := NewService(pruned, func() time.Time { return now }).Backfill(ctx, now.AddDate(0, 0, -8)); err != nil {
+		t.Fatalf("Backfill (pruned): %v", err)
+	}
+
+	for _, b := range []Bucket{Hourly, Daily} {
+		want := map[time.Time]Rollup{}
+		for _, r := range full.Rollups(b) {
+			want[r.BucketAt] = r
+		}
+		for _, r := range pruned.Rollups(b) {
+			w, ok := want[r.BucketAt]
+			if !ok {
+				continue
+			}
+			if r.Up != w.Up || r.Down != w.Down {
+				t.Errorf("%s bucket %s rewritten after pruning: up %d/down %d, was up %d/down %d",
+					string(b), r.BucketAt.Format(time.RFC3339), r.Up, r.Down, w.Up, w.Down)
+			}
+		}
+	}
+}
+
+// rangeRecorder records the span of every raw read.
+type rangeRecorder struct {
+	Store
+	longest time.Duration
+}
+
+func (r *rangeRecorder) HeartbeatsInRange(ctx context.Context, id int64, from, to time.Time) ([]domain.Heartbeat, error) {
+	r.longest = max(r.longest, to.Sub(from))
+	return r.Store.HeartbeatsInRange(ctx, id, from, to)
+}
+
+// TestBackfillReadsInBoundedChunks pins that the backfill never holds a
+// monitor's whole retention window in memory. It used to read all of it in one
+// call — 180 days of 20-second checks is ~780,000 heartbeats per monitor — and
+// it runs on every start.
+func TestBackfillReadsInBoundedChunks(t *testing.T) {
+	now := time.Date(2026, 3, 12, 9, 37, 13, 0, time.UTC)
+	inner := seedUptimeWeek(now)
+	rec := &rangeRecorder{Store: inner}
+	if err := NewService(rec, func() time.Time { return now }).Backfill(context.Background(), now.AddDate(0, 0, -30)); err != nil {
+		t.Fatalf("Backfill: %v", err)
+	}
+	if rec.longest == 0 {
+		t.Fatal("Backfill read no heartbeats")
+	}
+	if rec.longest > backfillChunk {
+		t.Fatalf("longest raw read = %s, want at most %s", rec.longest, backfillChunk)
+	}
+	// And chunking must not change the answer.
+	if len(inner.Rollups(Daily)) < 7 {
+		t.Fatalf("daily rollups after a chunked backfill = %d, want every seeded day", len(inner.Rollups(Daily)))
+	}
+}
+
 // --- outage already in progress at the window start ---------------------------
 
 // TestDowntimeLogReportsOutageOpenAtWindowStart covers the outage that begins
