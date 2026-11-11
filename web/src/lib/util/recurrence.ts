@@ -138,6 +138,29 @@ function instantAt(
 }
 
 /**
+ * `at` as a `datetime-local` value (YYYY-MM-DDTHH:mm) on the wall clock of
+ * `zone`. The input element itself has no notion of a zone, so this and
+ * fromZonedInput are the only place one is attached.
+ */
+export function toZonedInput(at: Date, zone: string): string {
+	const p = zonedParts(zone, at);
+	const pad = (n: number) => String(n).padStart(2, '0');
+	return `${p.year}-${pad(p.month)}-${pad(p.day)}T${pad(p.hour)}:${pad(p.minute)}`;
+}
+
+/**
+ * The instant a `datetime-local` value names on the wall clock of `zone`, or
+ * null when the value is not one. DST gaps and folds resolve exactly as they do
+ * for a recurrence (see instantAt), so both editors agree with the server.
+ */
+export function fromZonedInput(value: string, zone: string): Date | null {
+	const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$/.exec(value);
+	if (!m) return null;
+	const [year, month, day, hour, minute] = m.slice(1, 6).map(Number);
+	return instantAt(zone, year, month, day, hour, minute);
+}
+
+/**
  * The start of the first occurrence at or after `from`, or null if the
  * recurrence is not valid.
  *

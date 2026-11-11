@@ -824,6 +824,9 @@ export const en = {
 	'maintenance.weekdaysRequired': 'Pick at least one weekday.',
 	'maintenance.startTimeInvalid': 'Start time must be HH:MM.',
 	'maintenance.durationInvalid': 'Duration must be between 1 minute and 7 days.',
+	'maintenance.inputZone': 'Time zone: {zone}',
+	'maintenance.dateInvalid': 'Enter a start and an end.',
+	'maintenance.inEffect': 'In progress',
 
 	// ---- Users ----
 	'users.pageTitle': 'Users · Statwarden',
