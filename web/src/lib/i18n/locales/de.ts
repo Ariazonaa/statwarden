@@ -841,6 +841,9 @@ export const de: Messages = {
 	'maintenance.weekdaysRequired': 'Wähle mindestens einen Wochentag.',
 	'maintenance.startTimeInvalid': 'Startzeit muss im Format HH:MM angegeben werden.',
 	'maintenance.durationInvalid': 'Dauer muss zwischen 1 Minute und 7 Tagen liegen.',
+	'maintenance.inputZone': 'Zeitzone: {zone}',
+	'maintenance.dateInvalid': 'Bitte Beginn und Ende angeben.',
+	'maintenance.inEffect': 'Läuft gerade',
 
 	// ---- Users ----
 	'users.pageTitle': 'Benutzer · Statwarden',

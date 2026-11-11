@@ -12,9 +12,11 @@ import { describe, expect, it } from 'vitest';
 import {
 	describeRecurrence,
 	formatWeekdays,
+	fromZonedInput,
 	isValidRecurrence,
 	nextOccurrence,
-	parseClock
+	parseClock,
+	toZonedInput
 } from './recurrence';
 import type { MaintenanceRecurrence } from '$lib/api/types';
 
@@ -23,6 +25,43 @@ const rec = (over: Partial<MaintenanceRecurrence> = {}): MaintenanceRecurrence =
 	start: '02:00',
 	durationMinutes: 120,
 	...over
+});
+
+describe('zoned datetime-local values', () => {
+	// The browser hands a datetime-local field's value over with no zone at all.
+	// Reading it with `new Date(value)` used the BROWSER's zone, while every
+	// timestamp around it is shown in the zone chosen in the settings.
+	it('reads the wall clock in the given zone, not the browser’s', () => {
+		expect(fromZonedInput('2026-07-01T22:00', 'Europe/Berlin')?.toISOString()).toBe(
+			'2026-07-01T20:00:00.000Z'
+		);
+		expect(fromZonedInput('2026-01-15T22:00', 'Europe/Berlin')?.toISOString()).toBe(
+			'2026-01-15T21:00:00.000Z'
+		);
+		expect(fromZonedInput('2026-07-01T22:00', 'America/New_York')?.toISOString()).toBe(
+			'2026-07-02T02:00:00.000Z'
+		);
+	});
+
+	it('writes an instant back as that zone’s wall clock', () => {
+		const at = new Date('2026-07-01T20:00:00Z');
+		expect(toZonedInput(at, 'Europe/Berlin')).toBe('2026-07-01T22:00');
+		expect(toZonedInput(at, 'UTC')).toBe('2026-07-01T20:00');
+	});
+
+	it('round-trips across a DST change', () => {
+		for (const value of ['2026-03-28T23:30', '2026-03-29T03:00', '2026-10-25T04:00']) {
+			const at = fromZonedInput(value, 'Europe/Berlin');
+			expect(at).not.toBeNull();
+			expect(toZonedInput(at as Date, 'Europe/Berlin')).toBe(value);
+		}
+	});
+
+	it('rejects a malformed value instead of inventing an instant', () => {
+		expect(fromZonedInput('', 'UTC')).toBeNull();
+		expect(fromZonedInput('2026-07-01', 'UTC')).toBeNull();
+		expect(fromZonedInput('not a date', 'UTC')).toBeNull();
+	});
 });
 
 describe('parseClock', () => {

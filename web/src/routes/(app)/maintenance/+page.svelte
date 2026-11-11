@@ -14,9 +14,12 @@
 	import {
 		WEEKDAY_ORDER,
 		describeRecurrence,
+		fromZonedInput,
+		isRecurringInEffect,
 		isValidRecurrence,
 		nextOccurrence,
 		parseClock,
+		toZonedInput,
 		weekdayShortNames
 	} from '$lib/util/recurrence';
 	import { COMMON_TIMEZONES, formatDateTime, i18n, t } from '$lib/i18n';
@@ -85,14 +88,52 @@
 		loaded = true;
 	});
 
-	const toLocalInput = (iso: string) => {
-		const d = new Date(iso);
-		const off = d.getTimezoneOffset();
-		return new Date(d.getTime() - off * 60000).toISOString().slice(0, 16);
-	};
+	/**
+	 * The zone a one-off window's datetime-local fields are read in: the one every
+	 * timestamp on this screen is shown in. These used to go through the
+	 * browser's own zone, so with a zone chosen in the settings the editor showed
+	 * one wall clock and the list beside it another, and a typed 22:00 was saved
+	 * as 22:00 somewhere else. Captured when the editor opens, so a settings
+	 * change cannot shift the meaning of fields already filled in.
+	 */
+	let inputZone = $state(i18n.effectiveTimezone);
+	const toLocalInput = (iso: string) => toZonedInput(new Date(iso), inputZone);
+
+	// The list's "in progress" badges are a function of the clock, not just of
+	// the data, so they need something to re-evaluate them while the page sits
+	// open across a window's start or end.
+	let now = $state(Date.now());
+	$effect(() => {
+		const timer = setInterval(() => (now = Date.now()), 30_000);
+		return () => clearInterval(timer);
+	});
+
+	/**
+	 * Whether the window is suppressing alerts right now. `active` alone only
+	 * says the window is enabled — a badge reading "Active" on it marked a
+	 * window that ended last month exactly like one running at this moment.
+	 */
+	function inEffect(w: MaintenanceWindow, at: number): boolean {
+		if (!w.active) return false;
+		if (w.strategy === 'recurring') {
+			return (
+				!!w.recurrence &&
+				isRecurringInEffect(
+					w.recurrence,
+					w.timezone,
+					{ startsAt: w.startsAt || undefined, endsAt: w.endsAt || undefined },
+					new Date(at)
+				)
+			);
+		}
+		const start = Date.parse(w.startsAt);
+		const end = Date.parse(w.endsAt);
+		return start <= at && at < end;
+	}
 
 	function openCreate() {
 		editing = undefined;
+		inputZone = i18n.effectiveTimezone;
 		fTitle = '';
 		fDesc = '';
 		fStrategy = 'single';
@@ -109,6 +150,7 @@
 	}
 	function openEdit(w: MaintenanceWindow) {
 		editing = w;
+		inputZone = i18n.effectiveTimezone;
 		fTitle = w.title;
 		fDesc = w.description ?? '';
 		fStrategy = w.strategy;
@@ -158,6 +200,12 @@
 				return;
 			}
 		}
+		const starts = recurring ? null : fromZonedInput(fStart, inputZone);
+		const ends = recurring ? null : fromZonedInput(fEnd, inputZone);
+		if (!recurring && (!starts || !ends)) {
+			toast.error(t('maintenance.dateInvalid'));
+			return;
+		}
 		saving = true;
 		try {
 			const payload = {
@@ -174,8 +222,8 @@
 				// A recurring series runs unbounded: starts_at/ends_at are the
 				// window itself only for a one-off, and sending the editor's
 				// leftover pair would bound the series without saying so.
-				startsAt: recurring ? '' : new Date(fStart).toISOString(),
-				endsAt: recurring ? '' : new Date(fEnd).toISOString(),
+				startsAt: starts ? starts.toISOString() : '',
+				endsAt: ends ? ends.toISOString() : '',
 				// Copied out of the reactive draft so the request body cannot be
 				// mutated by later edits to the (still open) form.
 				recurrence: recurring
@@ -238,7 +286,11 @@
 				<div class="info">
 					<div class="titleline">
 						<strong>{w.title}</strong>
-						{#if w.active}<span class="badge live">{t('common.active')}</span>{/if}
+						{#if inEffect(w, now)}
+							<span class="badge live">{t('maintenance.inEffect')}</span>
+						{:else if !w.active}
+							<span class="badge off">{t('common.disabled')}</span>
+						{/if}
 					</div>
 					{#if w.description}<span class="desc">{w.description}</span>{/if}
 					{#if w.strategy === 'recurring' && w.recurrence}
@@ -308,8 +360,18 @@
 		</div>
 		{#if fStrategy === 'single'}
 			<div class="two">
-				<TextField label={t('maintenance.starts')} type="datetime-local" bind:value={fStart} />
-				<TextField label={t('maintenance.ends')} type="datetime-local" bind:value={fEnd} />
+				<TextField
+					label={t('maintenance.starts')}
+					type="datetime-local"
+					hint={t('maintenance.inputZone', { zone: inputZone })}
+					bind:value={fStart}
+				/>
+				<TextField
+					label={t('maintenance.ends')}
+					type="datetime-local"
+					hint={t('maintenance.inputZone', { zone: inputZone })}
+					bind:value={fEnd}
+				/>
 			</div>
 		{:else}
 			<div>
@@ -424,12 +486,18 @@
 		align-items: center;
 		gap: var(--space-3);
 	}
-	.badge.live {
+	.badge {
 		font-size: var(--text-caption-2);
 		padding: 1px var(--space-3);
 		border-radius: var(--radius-pill);
+	}
+	.badge.live {
 		background: var(--status-maintenance-tint);
 		color: var(--status-maintenance-text);
+	}
+	.badge.off {
+		border: 1px solid var(--hairline-strong);
+		color: var(--color-text-tertiary);
 	}
 	.desc {
 		font-size: var(--text-footnote);
