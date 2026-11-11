@@ -149,6 +149,36 @@ func runStoreContract(t *testing.T, newFixture func(t *testing.T) storeFixture) 
 		}
 	})
 
+	t.Run("checking a reset token reports it without redeeming it", func(t *testing.T) {
+		f := newFixture(t)
+		u := newUser(t, f, "peek@example.com")
+		now := time.Now().UTC()
+		for tok, exp := range map[string]time.Time{"live": now.Add(time.Hour), "stale": now.Add(-time.Minute)} {
+			if _, err := f.Store.CreatePasswordReset(ctx, PasswordReset{
+				UserID: u.ID, TokenHash: auth.HashToken(tok), ExpiresAt: exp, CreatedAt: now.Add(-time.Hour),
+			}); err != nil {
+				t.Fatalf("CreatePasswordReset(%s): %v", tok, err)
+			}
+		}
+		for tok, want := range map[string]bool{"live": true, "stale": false, "unknown": false} {
+			got, err := f.Store.PasswordResetRedeemable(ctx, auth.HashToken(tok), now)
+			if err != nil {
+				t.Fatalf("PasswordResetRedeemable(%s): %v", tok, err)
+			}
+			if got != want {
+				t.Errorf("PasswordResetRedeemable(%s) = %v, want %v", tok, got, want)
+			}
+		}
+		// Asking twice changes nothing: the live token is still redeemable, and
+		// redeeming it then makes the check say so.
+		if _, err := f.Store.ConsumePasswordReset(ctx, auth.HashToken("live"), "hash", now); err != nil {
+			t.Fatalf("redeem after the check: %v", err)
+		}
+		if got, err := f.Store.PasswordResetRedeemable(ctx, auth.HashToken("live"), now); err != nil || got {
+			t.Fatalf("PasswordResetRedeemable after redemption = %v, %v; want false, nil", got, err)
+		}
+	})
+
 	t.Run("revoking API keys touches only that account", func(t *testing.T) {
 		f := newFixture(t)
 		mine := newUser(t, f, "mine@example.com")

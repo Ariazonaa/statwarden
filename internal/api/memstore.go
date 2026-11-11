@@ -698,6 +698,22 @@ func (m *MemStore) ConsumePasswordReset(_ context.Context, tokenHash, passwordHa
 	return *found, nil
 }
 
+// PasswordResetRedeemable implements Store with the same predicate
+// ConsumePasswordReset applies, and changes nothing.
+func (m *MemStore) PasswordResetRedeemable(_ context.Context, tokenHash string, now time.Time) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if tokenHash == "" {
+		return false, nil
+	}
+	for _, r := range m.resets {
+		if r.TokenHash == tokenHash {
+			return r.UsedAt == nil && r.ExpiresAt.After(now), nil
+		}
+	}
+	return false, nil
+}
+
 // --- monitors ---
 
 func (m *MemStore) CreateMonitor(_ context.Context, in MonitorInput) (domain.Monitor, error) {
