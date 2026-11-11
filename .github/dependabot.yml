@@ -30,6 +30,9 @@ updates:
       # adapter-static 4 requires @sveltejs/kit 3; it comes with that migration.
       - dependency-name: "@sveltejs/adapter-static"
         update-types: [version-update:semver-major]
+      # SvelteKit 3 is a framework migration, done as its own change.
+      - dependency-name: "@sveltejs/kit"
+        update-types: [version-update:semver-major]
 
   # Every action is pinned by commit SHA, with the version it stands for in a
   # trailing comment; Dependabot moves both. They move together, so one pull
