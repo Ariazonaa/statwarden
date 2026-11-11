@@ -206,6 +206,7 @@ func newHarnessTweaked(t *testing.T, tweak func(*Options)) *harness {
 		Mailer:          mails,
 		// A base URL is needed for the password-reset link.
 		PublicBaseURL: "https://statwarden.example",
+		SetupToken:    testSetupToken,
 	}
 	if tweak != nil {
 		tweak(&opts)
@@ -213,6 +214,9 @@ func newHarnessTweaked(t *testing.T, tweak func(*Options)) *harness {
 	h, srv := newWithServer(opts)
 	return &harness{t: t, handler: h, srv: srv, monReg: mr, store: store, engine: eng, maint: maint, mails: mails}
 }
+
+// testSetupToken is the first-run setup token every harness is configured with.
+const testSetupToken = "harness-setup-secret"
 
 // request performs a request and returns the recorder.
 func (h *harness) request(method, target string, body any) *httptest.ResponseRecorder {
@@ -318,6 +322,7 @@ func (h *harness) setupAdmin() *session {
 	h.t.Helper()
 	rec := h.request(http.MethodPost, "/api/v1/setup", setupRequest{
 		Email: "admin@example.com", Password: "supersecret", DisplayName: "Admin",
+		SetupToken: testSetupToken,
 	})
 	if rec.Code != http.StatusCreated {
 		h.t.Fatalf("setup = %d, body %s", rec.Code, rec.Body.String())

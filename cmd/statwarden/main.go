@@ -795,7 +795,10 @@ func run() error {
 	})
 	auditSink.Run(queueCtx)
 
+	setupToken := firstRunSetupToken(ctx, cfg, store, logger)
+
 	handler := api.New(api.Options{
+		SetupToken:     setupToken,
 		Logger:         logger,
 		Pool:           pool,
 		Static:         statwarden.SPAHandler(),

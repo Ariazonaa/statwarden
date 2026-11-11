@@ -106,6 +106,7 @@ func newStatusHarness(t *testing.T) *statusHarness {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	maint := newMaintenanceProvider(store, log)
 	h := New(Options{
+		SetupToken:      testSetupToken,
 		Logger:          log,
 		Store:           store,
 		Engine:          eng,

@@ -142,6 +142,7 @@ func TestSetupIsAtomicUnderConcurrency(t *testing.T) {
 				Email:       fmt.Sprintf("admin%d@example.com", i),
 				Password:    "supersecret",
 				DisplayName: "Admin",
+				SetupToken:  testSetupToken,
 			})
 			codes[i] = rec.Code
 		}(i)

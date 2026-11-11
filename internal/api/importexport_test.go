@@ -79,6 +79,7 @@ func newImportHarness(t *testing.T, box SecretsBox) *harness {
 	maint := newMaintenanceProvider(store, log)
 	mails := &mailCapture{}
 	h := New(Options{
+		SetupToken:      testSetupToken,
 		Logger:          log,
 		Store:           store,
 		Engine:          eng,

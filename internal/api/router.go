@@ -146,6 +146,11 @@ type Options struct {
 	Maintenance MaintenanceProvider
 	// PublicBaseURL is used to render absolute push URLs; optional.
 	PublicBaseURL string
+	// SetupToken is the secret POST /setup requires while no account exists.
+	// cmd/statwarden prints it in the startup log. Empty refuses setup rather
+	// than allowing it without one: a forgotten wiring must not reopen the
+	// first-run takeover the token exists to close.
+	SetupToken string
 	// AllowedOrigins are extra browser origins (beyond PublicBaseURL) accepted by
 	// the WebSocket origin check, for an instance reached under more than one
 	// hostname. Each is an absolute http(s) URL. Empty is the norm.
@@ -167,6 +172,8 @@ type Options struct {
 }
 
 type server struct {
+	// setupToken gates the first-run setup endpoint; see Options.SetupToken.
+	setupToken     string
 	logger         *slog.Logger
 	pool           *pgxpool.Pool
 	store          Store
@@ -279,6 +286,7 @@ func newWithServer(o Options) (http.Handler, *server) {
 		wsPub:          o.WSPublisher,
 		maint:          o.Maintenance,
 		baseURL:        o.PublicBaseURL,
+		setupToken:     o.SetupToken,
 		allowedOrigins: o.AllowedOrigins,
 		secureCookies:  o.SecureCookies,
 		sessionSecret:  o.SessionSecret,
