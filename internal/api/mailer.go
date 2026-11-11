@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/mail"
 	"net/smtp"
 	"strconv"
 	"strings"
@@ -135,10 +136,13 @@ func smtpSend(ctx context.Context, s SMTPSettings, to string, msg []byte) error 
 			return fmt.Errorf("auth: %w", err)
 		}
 	}
-	if err := client.Mail(s.From); err != nil {
+	// The envelope takes the bare address: a display-name form such as
+	// "Statwarden <noreply@example.com>" is a valid From header but becomes
+	// "<Statwarden <noreply@…>>" in MAIL FROM, which MTAs refuse with a 501.
+	if err := client.Mail(envelopeAddress(s.From)); err != nil {
 		return fmt.Errorf("MAIL FROM: %w", err)
 	}
-	if err := client.Rcpt(to); err != nil {
+	if err := client.Rcpt(envelopeAddress(to)); err != nil {
 		return fmt.Errorf("RCPT TO %s: %w", to, err)
 	}
 	w, err := client.Data()
@@ -152,6 +156,16 @@ func smtpSend(ctx context.Context, s SMTPSettings, to string, msg []byte) error 
 		return fmt.Errorf("close body: %w", err)
 	}
 	return client.Quit()
+}
+
+// envelopeAddress returns the addr-spec of an RFC 5322 address, dropping any
+// display name. An address that does not parse is passed through so the
+// server's own refusal is what gets reported.
+func envelopeAddress(s string) string {
+	if a, err := mail.ParseAddress(s); err == nil {
+		return a.Address
+	}
+	return s
 }
 
 // WSPublisher broadcasts a public status-page update to WebSocket subscribers of

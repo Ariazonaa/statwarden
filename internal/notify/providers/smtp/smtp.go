@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/mail"
 	"net/smtp"
+	"net/textproto"
 	"strconv"
 	"strings"
 	"time"
@@ -175,7 +176,7 @@ func smtpSend(ctx context.Context, c Config, msg []byte) error {
 	client, err := smtp.NewClient(conn, c.Host)
 	if err != nil {
 		_ = conn.Close()
-		return fmt.Errorf("smtp handshake: %w", err)
+		return handshakeError(err)
 	}
 	defer func() { _ = client.Close() }()
 
@@ -189,11 +190,16 @@ func smtpSend(ctx context.Context, c Config, msg []byte) error {
 			return fmt.Errorf("auth: %w", err)
 		}
 	}
-	if err := client.Mail(c.From); err != nil {
+	// The envelope takes the bare address. Validate accepts anything net/mail
+	// parses, display names included ("Ops <ops@example.com>"), and handing
+	// that string to MAIL FROM produced "<Ops <ops@example.com>>", which every
+	// MTA refuses with a 501 — on a channel the UI had just accepted. The
+	// header keeps the configured form, display name and all.
+	if err := client.Mail(envelopeAddress(c.From)); err != nil {
 		return fmt.Errorf("MAIL FROM: %w", err)
 	}
 	for _, rcpt := range c.To {
-		if err := client.Rcpt(rcpt); err != nil {
+		if err := client.Rcpt(envelopeAddress(rcpt)); err != nil {
 			return fmt.Errorf("RCPT TO %s: %w", rcpt, err)
 		}
 	}
@@ -208,6 +214,39 @@ func smtpSend(ctx context.Context, c Config, msg []byte) error {
 		return fmt.Errorf("close body: %w", err)
 	}
 	return client.Quit()
+}
+
+// handshakeError reports a failed greeting without the text the remote end
+// sent.
+//
+// The host is whatever a writer typed in, and the test button connects to it
+// from inside the network. Quoting the first line the peer sent turned that
+// button into a banner grabber for any internal service — an HTTP server's
+// status line, a database's greeting, a version string. Up to the greeting the
+// peer has not shown itself to be a mail server, so nothing it said is passed
+// on; an SMTP reply code is kept, because that much is what an operator needs
+// to tell "refused" from "not a mail server". Later replies come from a peer
+// that did greet as one and are reported in full.
+func handshakeError(err error) error {
+	var tperr *textproto.Error
+	if errors.As(err, &tperr) {
+		return fmt.Errorf("smtp handshake: the server refused the session (reply code %d)", tperr.Code)
+	}
+	var nerr net.Error
+	if errors.As(err, &nerr) {
+		return fmt.Errorf("smtp handshake: %w", err)
+	}
+	return errors.New("smtp handshake: the server did not answer as an SMTP server")
+}
+
+// envelopeAddress returns the addr-spec of an RFC 5322 address, dropping any
+// display name. An address that does not parse is passed through unchanged so
+// the server's own refusal is what gets reported.
+func envelopeAddress(s string) string {
+	if a, err := mail.ParseAddress(s); err == nil {
+		return a.Address
+	}
+	return s
 }
 
 // sanitizeHeader strips CR and LF to prevent header injection.
