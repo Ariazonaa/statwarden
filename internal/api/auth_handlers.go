@@ -176,7 +176,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 // The backup-code branch writes through setUserTOTP, which re-seals, so
 // consuming a backup code also upgrades a legacy plaintext row.
 func (s *server) verifySecondFactor(r *http.Request, creds *Credentials, totpCode, backupCode string) bool {
-	if totpCode != "" && creds.TOTPSecret != "" && auth.VerifyTOTP(creds.TOTPSecret, totpCode, s.now()) {
+	if totpCode != "" && creds.TOTPSecret != "" && s.verifyTOTPOnce(creds.ID, creds.TOTPSecret, totpCode) {
 		return true
 	}
 	if backupCode != "" {

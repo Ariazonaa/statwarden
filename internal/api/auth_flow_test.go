@@ -134,8 +134,9 @@ func TestTwoFactorLogin(t *testing.T) {
 	if _, c := h.login("admin@example.com", "supersecret", ""); c != http.StatusUnauthorized {
 		t.Fatalf("login without 2FA = %d, want 401", c)
 	}
-	// Login with a fresh TOTP code succeeds.
-	fresh, _ := auth.TOTPCode(secret, time.Now())
+	// Login with a fresh TOTP code succeeds. Fresh means the NEXT time step: the
+	// code that finished the enrolment has been used and is refused from now on.
+	fresh, _ := auth.TOTPCode(secret, time.Now().Add(30*time.Second))
 	if _, c := h.login("admin@example.com", "supersecret", fresh); c != http.StatusOK {
 		t.Fatalf("login with 2FA = %d, want 200", c)
 	}

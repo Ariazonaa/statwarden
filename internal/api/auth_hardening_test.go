@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -244,4 +245,73 @@ func TestReauthenticationChecksAreAttemptLimited(t *testing.T) {
 			t.Fatalf("right code after %d failures = %d, want 429", lockoutThreshold, rec.Code)
 		}
 	})
+}
+
+// A TOTP code verifies for about ninety seconds (its own step plus one either
+// side), and nothing remembered that it had already been used. Someone who saw
+// a code typed — over a shoulder, in a phishing proxy, in a screen recording —
+// could sign in with it again inside that window. RFC 6238 §5.2 says a verifier
+// must not accept the same code twice; each account now remembers the last step
+// it accepted.
+func TestTOTPCodeCannotBeReplayed(t *testing.T) {
+	h := newHarness(t)
+	admin := h.setupAdmin()
+	secret, _ := enableTOTPDirect(t, h, admin.userID)
+	code, err := auth.TOTPCode(secret, time.Now())
+	if err != nil {
+		t.Fatalf("TOTPCode: %v", err)
+	}
+
+	if _, c := h.login("admin@example.com", "supersecret", code); c != http.StatusOK {
+		t.Fatalf("first use of the code = %d, want 200", c)
+	}
+	if _, c := h.login("admin@example.com", "supersecret", code); c != http.StatusUnauthorized {
+		t.Fatalf("second use of the same code = %d, want 401", c)
+	}
+
+	// Nor can a code already spent on a login be spent again on a step-up.
+	rec := h.requestWith(http.MethodPost, "/api/v1/me/api-keys",
+		createAPIKeyRequest{Name: "k", stepUp: stepUp{Password: "supersecret", TOTPCode: code}}, admin)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("step-up with the spent code = %d, want 403", rec.Code)
+	}
+
+	// The next step's code is a new code and is accepted.
+	next, err := auth.TOTPCode(secret, time.Now().Add(30*time.Second))
+	if err != nil {
+		t.Fatalf("TOTPCode: %v", err)
+	}
+	if _, c := h.login("admin@example.com", "supersecret", next); c != http.StatusOK {
+		t.Fatalf("login with the next step's code = %d, want 200", c)
+	}
+}
+
+// steppingClock is a server clock a test moves forward one TOTP step at a time,
+// for tests that need more authenticator codes than the skew window holds: each
+// code is single-use, and only three steps verify at any one moment.
+type steppingClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func newSteppingClock() *steppingClock { return &steppingClock{t: time.Now()} }
+
+func (c *steppingClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+// nextCode advances the clock one step and returns the code for it.
+func (c *steppingClock) nextCode(t *testing.T, secret string) string {
+	t.Helper()
+	c.mu.Lock()
+	c.t = c.t.Add(30 * time.Second)
+	at := c.t
+	c.mu.Unlock()
+	code, err := auth.TOTPCode(secret, at)
+	if err != nil {
+		t.Fatalf("TOTPCode: %v", err)
+	}
+	return code
 }
