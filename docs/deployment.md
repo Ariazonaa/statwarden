@@ -292,6 +292,32 @@ anonymous visitors.
 
 ---
 
+## Restricting check targets
+
+By default a monitor check or a notification channel may connect to any address, including
+`localhost`, private networks and the cloud metadata endpoint at `169.254.169.254`. Watching
+internal services is what most installations are for, so that is deliberate.
+
+When people who may edit monitors should not be able to use the server to probe the network it
+runs in, set `BLOCK_PRIVATE_TARGETS=true`. Checks and notification channels then refuse
+loopback, private (RFC 1918, `fc00::/7`), link-local, carrier-grade NAT, unspecified, multicast
+and broadcast addresses, including their IPv4-mapped and NAT64 forms, and unix sockets. A refused
+check is recorded as DOWN with a message naming the setting.
+
+How it is enforced:
+
+- Before every check, the target fields of the monitor's configuration (`url`, `host`, `broker`,
+  `server`, `target`, `resolver`, `proxy_url`, …) are resolved and refused if any address is in a
+  blocked range. This covers every monitor type.
+- HTTP, TCP, UDP, WebSocket and TLS-certificate checks, the webhook channel, SMTP and the other
+  HTTP notification channels also check the address at the moment they connect. That catches
+  redirects to a private address and names whose DNS answer changes between the check and the
+  connection.
+- Monitor types whose client library dials on its own (PostgreSQL, MySQL, MongoDB, Redis, MQTT,
+  gRPC, SNMP, RADIUS, NTP, Steam, ping, Docker) rely on the first check only. A name that changes
+  its answer in between can still reach a private address there.
+- The audit and outbound webhooks configured by an admin under Settings are not restricted.
+
 ## Credentials in URLs
 
 Two endpoints accept a credential in the query string, and **both are deprecated**:

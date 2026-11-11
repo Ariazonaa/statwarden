@@ -53,6 +53,13 @@ So you know what a report is measured against:
 - Passwords are argon2id; sessions are opaque server-side tokens; CSRF is
   double-submit; login is rate-limited with account lockout; TOTP and scoped,
   expiring API keys are supported.
+- Monitor checks and notification channels reach whatever their configuration
+  names, including the local network, because that is what a self-hosted
+  monitor is for. On an instance shared with people who should not be able to
+  probe that network, `BLOCK_PRIVATE_TARGETS=true` refuses private, loopback
+  and link-local targets (see docs/deployment.md, "Restricting check targets").
+  A report that a writer can reach an internal address with the guard off is
+  expected behaviour, not a finding.
 - Every push and pull request runs gitleaks over the full history, Trivy over
   the tree, `npm audit` and `govulncheck`; the published image is scanned with
   Trivy before it is pushed. A finding at HIGH or above fails the build.

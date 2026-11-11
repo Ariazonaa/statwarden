@@ -75,6 +75,8 @@ services:
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
       # Optional first-run setup secret; unset, one is generated and logged.
       SETUP_TOKEN: ${SETUP_TOKEN:-}
+      # Refuse private/loopback/link-local check and webhook targets.
+      BLOCK_PRIVATE_TARGETS: ${BLOCK_PRIVATE_TARGETS:-false}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       LOG_FORMAT: ${LOG_FORMAT:-json}
       UPLOADS_DIR: /data/uploads
