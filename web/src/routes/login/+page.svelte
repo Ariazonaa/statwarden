@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { api, problemMessage, problemStatus } from '$lib/api';
+	import { api, problemMessage, problemStatus, USE_MOCK } from '$lib/api';
 	import type { OidcProvider } from '$lib/api';
 	import { session } from '$lib/stores/session.svelte';
 	import { t, type MessageKey } from '$lib/i18n';
@@ -52,7 +52,13 @@
 	onMount(async () => {
 		// Named ssoCode, not code: `code` is the 2FA input field above.
 		const ssoCode = page.url.searchParams.get('error');
-		if (ssoCode) ssoError = t(SSO_ERRORS[ssoCode] ?? 'login.ssoFailed');
+		// Own keys only: the code comes from the query string, and a plain lookup
+		// on an object literal also answers `constructor`, `toString` and the
+		// rest of Object.prototype — a function, which t() then printed.
+		if (ssoCode) {
+			const key = Object.hasOwn(SSO_ERRORS, ssoCode) ? SSO_ERRORS[ssoCode] : 'login.ssoFailed';
+			ssoError = t(key);
+		}
 
 		// Bounce to setup if the instance has no admin yet; skip login if already in.
 		await session.load();
@@ -186,7 +192,11 @@
 					{/each}
 				</div>
 			{/if}
-			<p class="hint">{tipParts[0]}<code>ops</code>{tipParts[1] ?? ''}</p>
+			<!-- The demo account exists only in the mock backend; on a real
+			     instance this pointed every visitor at a login that does not work. -->
+			{#if USE_MOCK}
+				<p class="hint">{tipParts[0]}<code>ops</code>{tipParts[1] ?? ''}</p>
+			{/if}
 		{:else}
 			{#if mode === 'totp'}
 				<p class="lead">{t('login.twofaLead')}</p>
