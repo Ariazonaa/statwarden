@@ -23,6 +23,10 @@ services:
     #   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
     image: ${STATWARDEN_IMAGE:-ghcr.io/ariazonaa/statwarden:latest}
     restart: unless-stopped
+    # Docker's default is 10s before SIGKILL, shorter than the app's own 15s
+    # graceful-shutdown budget, so in-flight checks and alerts were cut off on
+    # every `docker compose down` or image update. 30s matches the systemd unit.
+    stop_grace_period: 30s
     depends_on:
       db:
         condition: service_healthy

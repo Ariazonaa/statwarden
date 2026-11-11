@@ -784,6 +784,15 @@ func run() error {
 	logger.Info("shutdown signal received, draining connections", "timeout", shutdownTimeout.String())
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
+	// Producers before consumers: the HTTP server first, then the engine, then
+	// the dispatcher both of them feed. The push endpoint is an HTTP handler
+	// that emits state changes, so stopping the dispatcher while the server was
+	// still draining accepted a push heartbeat with 200 and dropped the alert
+	// it caused — typically the recovery of a cron job that had just come back.
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.Error("graceful shutdown incomplete, forcing close", "error", err)
+		_ = srv.Close()
+	}
 	if eng != nil {
 		if err := eng.Stop(shutdownCtx); err != nil {
 			logger.Error("monitor engine drain incomplete", "error", err)
@@ -793,10 +802,6 @@ func run() error {
 		if err := dispatcher.Stop(shutdownCtx); err != nil {
 			logger.Error("notification dispatcher drain incomplete", "error", err)
 		}
-	}
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		logger.Error("graceful shutdown incomplete, forcing close", "error", err)
-		_ = srv.Close()
 	}
 	// Only NOW are the queues told to stop, so everything the steps above
 	// produced is still accepted, and the drain has something to drain.
