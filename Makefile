@@ -4,6 +4,10 @@
 MODULE  := github.com/Ariazonaa/statwarden
 # Pinned so every machine and CI run lints with the same version — bump here only.
 GOLANGCI_LINT_VERSION := v2.12.2
+# Pinned to the version that generated internal/db/sqlcgen (see its header):
+# with @latest, regenerating on another day rewrote every file for a version
+# bump nobody chose.
+SQLC_VERSION := v1.31.1
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -89,7 +93,7 @@ migrate:
 
 ## sqlc: regenerate type-safe query code from internal/db/queries
 sqlc:
-	go run github.com/sqlc-dev/sqlc/cmd/sqlc@latest generate
+	go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
 
 ## docker: build the production image
 docker:
