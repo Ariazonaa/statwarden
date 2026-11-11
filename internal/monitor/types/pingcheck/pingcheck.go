@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"time"
 
 	probing "github.com/prometheus-community/pro-bing"
@@ -109,15 +110,25 @@ func assess(c Config, st stats) (domain.MonitorStatus, string) {
 // runPing is the default pro-bing transport. It uses an unprivileged UDP ping
 // so no raw-socket privileges are required.
 func runPing(ctx context.Context, c Config) (stats, error) {
-	pinger, err := probing.NewPinger(c.Host)
+	// Resolved here, under ctx: probing.NewPinger resolves through
+	// net.ResolveIPAddr, which takes no context, so a hanging resolver held the
+	// check past its own timeout.
+	target, err := resolveTarget(ctx, c.Host)
+	if err != nil {
+		return stats{}, fmt.Errorf("ping: resolve %q: %w", c.Host, err)
+	}
+	pinger, err := probing.NewPinger(target)
 	if err != nil {
 		return stats{}, fmt.Errorf("ping: resolve %q: %w", c.Host, err)
 	}
 	pinger.SetPrivileged(false) // unprivileged UDP ping
 	pinger.Count = c.count()
+	var remaining time.Duration
 	if deadline, ok := ctx.Deadline(); ok {
-		pinger.Timeout = time.Until(deadline)
+		remaining = time.Until(deadline)
+		pinger.Timeout = remaining
 	}
+	pinger.Interval = probeInterval(pinger.Count, remaining)
 	if err := pinger.RunWithContext(ctx); err != nil {
 		return stats{}, fmt.Errorf("ping: %w", err)
 	}
@@ -129,6 +140,39 @@ func runPing(ctx context.Context, c Config) (stats, error) {
 		AvgRTT:      s.AvgRtt,
 		AvgRTTMs:    float64(s.AvgRtt) / float64(time.Millisecond),
 	}, nil
+}
+
+// resolveTarget turns host into an address literal, honouring ctx. IPv4 is
+// preferred, matching what pro-bing's own resolution picks.
+func resolveTarget(ctx context.Context, host string) (string, error) {
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return "", err
+	}
+	if len(addrs) == 0 {
+		return "", fmt.Errorf("no addresses for %s", host)
+	}
+	for _, a := range addrs {
+		if a.IP.To4() != nil {
+			return a.String(), nil
+		}
+	}
+	return addrs[0].String(), nil
+}
+
+// defaultProbeInterval is pro-bing's own spacing between echo requests.
+const defaultProbeInterval = time.Second
+
+// probeInterval spaces count probes so that all of them, plus one interval for
+// the last reply, fit into remaining. pro-bing stops at its Timeout, and with
+// the default 1s spacing four probes did not fit a 3s timeout: the missing
+// replies were reported as packet loss on a healthy host. remaining <= 0 means
+// no deadline.
+func probeInterval(count int, remaining time.Duration) time.Duration {
+	if remaining <= 0 || count <= 0 {
+		return defaultProbeInterval
+	}
+	return min(defaultProbeInterval, remaining/time.Duration(count+1))
 }
 
 // extraJSON marshals the ping statistics for the heartbeat Extra column.
