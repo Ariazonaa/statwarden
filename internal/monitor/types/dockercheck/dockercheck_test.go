@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Ariazonaa/statwarden/internal/domain"
@@ -186,4 +187,21 @@ func TestLiveInspectUnixSocket(t *testing.T) {
 		t.Fatalf("liveInspect() = %+v, want running", st)
 	}
 	_ = os.Remove(sock)
+}
+
+// The inspect body is decoded whole, and json.Decoder buffers the entire value
+// first, so an endpoint answering with an endless document grew memory without
+// bound. One a little over the cap shows it is enforced.
+func TestLiveInspectRejectsAnOversizedResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"Pad":"` + strings.Repeat("a", maxInspectBytes) + `","State":{"Status":"running"}}`))
+	}))
+	defer srv.Close()
+
+	cfg := Config{Endpoint: "tcp://" + srv.Listener.Addr().String(), Container: "web"}
+	_, err := liveInspect(context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("liveInspect() error = %v, want the size cap to be reported", err)
+	}
 }
