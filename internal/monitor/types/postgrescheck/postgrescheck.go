@@ -116,6 +116,18 @@ func (c Config) okMessage() string {
 	return "connection established"
 }
 
+// cleanupTimeout bounds the rollback and close after the probe. They run on a
+// fresh context so a probe whose own context has ended still tears down, but
+// an unbounded one let a server that stopped answering hold the check — and
+// with it the monitor, which is not rescheduled until its check returns —
+// forever. A variable so tests need not wait it out.
+var cleanupTimeout = 5 * time.Second
+
+// cleanupContext returns the bounded context the teardown runs on.
+func cleanupContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), cleanupTimeout)
+}
+
 // livePostgres performs the real connection and optional query with pgx.
 func livePostgres(ctx context.Context, c Config) (probeResult, error) {
 	connCtx, cancel := context.WithTimeout(ctx, time.Duration(c.connectTimeout())*time.Second)
@@ -125,8 +137,12 @@ func livePostgres(ctx context.Context, c Config) (probeResult, error) {
 	if err != nil {
 		return probeResult{}, err
 	}
-	// Close on a fresh context so a cancelled probe still tears down cleanly.
-	defer func() { _ = conn.Close(context.Background()) }()
+	// Close on a fresh, bounded context so a cancelled probe still tears down.
+	defer func() {
+		cctx, cancel := cleanupContext()
+		defer cancel()
+		_ = conn.Close(cctx)
+	}()
 
 	if c.Query == "" {
 		if err := conn.Ping(connCtx); err != nil {
@@ -155,7 +171,11 @@ func livePostgres(ctx context.Context, c Config) (probeResult, error) {
 	// Always rolled back: a read-only transaction has nothing to commit, and
 	// rolling back costs one round trip that the deferred close would make
 	// anyway.
-	defer func() { _ = tx.Rollback(context.Background()) }()
+	defer func() {
+		cctx, cancel := cleanupContext()
+		defer cancel()
+		_ = tx.Rollback(cctx)
+	}()
 
 	var value any
 	if err := tx.QueryRow(connCtx, c.Query).Scan(&value); err != nil {

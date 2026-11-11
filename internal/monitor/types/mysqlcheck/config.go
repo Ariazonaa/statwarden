@@ -93,6 +93,13 @@ func (c Config) dsn() string {
 	mc.DBName = c.Database
 	mc.TLSConfig = c.tlsParam()
 	mc.Timeout = c.connectTimeout()
+	// Per-I/O bounds as well as the dial bound. The probe's own queries run
+	// under a context, but database/sql's Tx.Rollback takes none, so without
+	// these a server that stopped answering after the query held the check
+	// forever. No single read may outlast the whole probe anyway, so the
+	// connect timeout costs nothing a working server would notice.
+	mc.ReadTimeout = c.connectTimeout()
+	mc.WriteTimeout = c.connectTimeout()
 	return mc.FormatDSN()
 }
 
