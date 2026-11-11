@@ -108,7 +108,7 @@ type loginRequest struct {
 // TOTP when enabled), enforcing per-IP rate limiting and per-account lockout. On
 // success it issues a session.
 func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if !s.loginLimiter.allow("login:" + clientIP(r)) {
+	if !s.loginLimiter.allow("login:" + rateLimitAddr(clientIP(r))) {
 		writeProblemDetail(w, http.StatusTooManyRequests, "too many login attempts, slow down")
 		return
 	}
