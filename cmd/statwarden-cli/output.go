@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"text/tabwriter"
+	"unicode"
 )
 
 // writeJSON prints v as indented JSON. This is the scripting escape hatch: it
@@ -31,12 +33,12 @@ func writeMonitorTable(w io.Writer, monitors []MonitorView) error {
 	for _, m := range monitors {
 		_, _ = fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			m.ID,
-			truncate(m.Name, 32),
-			m.Type,
-			statusLabel(m),
+			truncate(terminalSafe(m.Name), 32),
+			terminalSafe(m.Type),
+			terminalSafe(statusLabel(m)),
 			formatUptime(m.Uptime24h),
 			formatLatency(m.LatencyMs),
-			truncate(m.URL, 44),
+			truncate(terminalSafe(m.URL), 44),
 		)
 	}
 	return tw.Flush()
@@ -45,7 +47,7 @@ func writeMonitorTable(w io.Writer, monitors []MonitorView) error {
 // writeMonitorDetail renders a single monitor as a key/value block.
 func writeMonitorDetail(w io.Writer, m MonitorView) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	row := func(k string, v string) { _, _ = fmt.Fprintf(tw, "%s\t%s\n", k, v) }
+	row := func(k string, v string) { _, _ = fmt.Fprintf(tw, "%s\t%s\n", k, terminalSafe(v)) }
 
 	row("ID", strconv.FormatInt(m.ID, 10))
 	row("Name", m.Name)
@@ -103,6 +105,37 @@ func formatLatency(v *int) string {
 		return "-"
 	}
 	return strconv.Itoa(*v) + "ms"
+}
+
+// terminalSafe replaces every control character and every Unicode bidi
+// formatting character in s with U+FFFD before it is printed.
+//
+// Monitor names, URLs, descriptions and error details come from the server,
+// and any user with the writer role sets them. Printed raw, an escape sequence
+// in a monitor name drove the terminal of whoever listed monitors — retitled
+// it, cleared it, rewrote earlier lines — a newline or tab forged rows and
+// columns, and a bidi override made text read differently from what it is.
+// Only the table and detail renderers need this; --json output is escaped by
+// the encoder already.
+func terminalSafe(s string) string {
+	if strings.IndexFunc(s, unsafeRune) < 0 {
+		return s
+	}
+	return strings.Map(func(r rune) rune {
+		if unsafeRune(r) {
+			return '�'
+		}
+		return r
+	}, s)
+}
+
+// unsafeRune reports C0/C1 control characters, DEL, and the bidi embedding,
+// override and isolate controls.
+func unsafeRune(r rune) bool {
+	return unicode.IsControl(r) ||
+		(r >= '\u202a' && r <= '\u202e') ||
+		(r >= '\u2066' && r <= '\u2069') ||
+		r == '\u200e' || r == '\u200f' || r == '\u061c'
 }
 
 func truncate(s string, max int) string {
