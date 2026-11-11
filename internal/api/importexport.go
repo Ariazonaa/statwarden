@@ -102,17 +102,37 @@ func (s *server) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, p := range pages {
 		spec := importexport.StatusPageSpec{
-			Slug:        p.Slug,
-			Title:       p.Title,
-			Description: p.Description,
-			FooterText:  p.FooterText,
-			Theme:       p.Theme,
-			Published:   p.Published,
+			Slug:          p.Slug,
+			Title:         p.Title,
+			Description:   p.Description,
+			FooterText:    p.FooterText,
+			Theme:         p.Theme,
+			AccentColor:   p.AccentColor,
+			Locale:        p.Locale,
+			Published:     p.Published,
+			HasPassword:   p.HasPassword || p.PasswordHash != "",
+			AllowIndexing: p.AllowIndexing,
 		}
 		for _, mid := range p.MonitorIDs {
 			if name, ok := nameByID[mid]; ok {
 				spec.Monitors = append(spec.Monitors, name)
 			}
+		}
+		groupName := make(map[int64]string, len(p.Groups))
+		for _, g := range p.Groups {
+			groupName[g.ID] = g.Name
+			spec.Groups = append(spec.Groups, importexport.StatusPageGroupSpec{Name: g.Name, SortOrder: g.SortOrder})
+		}
+		for _, e := range p.Monitors {
+			name, ok := nameByID[e.MonitorID]
+			if !ok {
+				continue
+			}
+			entry := importexport.StatusPageEntrySpec{Monitor: name, SortOrder: e.SortOrder, ShowUptime: e.ShowUptime}
+			if e.GroupID != nil {
+				entry.Group = groupName[*e.GroupID]
+			}
+			spec.Layout = append(spec.Layout, entry)
 		}
 		bundle.StatusPages = append(bundle.StatusPages, spec)
 	}
@@ -403,35 +423,73 @@ func (s *server) applyBundle(r *http.Request, monitors []importexport.MonitorSpe
 	}
 
 	for _, p := range pages {
-		var ids []int64
-		for _, name := range p.Monitors {
-			id, ok := idByName[name]
-			if !ok {
-				// Resolved against the monitors created in THIS call, so a monitor the
-				// loop above skipped takes its status-page slot with it. Reported, or
-				// the page comes up listing fewer services than the bundle described
-				// and the result still reads as a clean import.
-				res.Warnings = append(res.Warnings,
-					"status page "+p.Slug+": monitor "+name+" was not imported, omitted from the page")
-				continue
-			}
-			ids = append(ids, id)
-		}
-		if _, err := s.store.CreateStatusPage(ctx, StatusPage{
-			Slug:        p.Slug,
-			Title:       p.Title,
-			Description: p.Description,
-			FooterText:  p.FooterText,
-			Theme:       nonEmptyTheme(p.Theme),
-			Published:   p.Published,
-			MonitorIDs:  ids,
-		}); err != nil {
+		page, warnings := pageFromSpec(p, idByName)
+		res.Warnings = append(res.Warnings, warnings...)
+		if _, err := s.store.CreateStatusPage(ctx, page); err != nil {
 			res.Warnings = append(res.Warnings, "status page "+p.Slug+": "+err.Error())
 			continue
 		}
 		res.StatusPages++
 	}
 	return res
+}
+
+// pageFromSpec builds the status page an imported spec describes, resolving
+// monitor names through idByName, and returns the warnings the operator needs.
+func pageFromSpec(p importexport.StatusPageSpec, idByName map[string]int64) (StatusPage, []string) {
+	var warnings []string
+	// Resolved against the monitors created in THIS call, so a monitor the
+	// monitor loop skipped takes its status-page slot with it. Reported, or the
+	// page comes up listing fewer services than the bundle described and the
+	// result still reads as a clean import.
+	resolve := func(name string) (int64, bool) {
+		id, ok := idByName[name]
+		if !ok {
+			warnings = append(warnings,
+				"status page "+p.Slug+": monitor "+name+" was not imported, omitted from the page")
+		}
+		return id, ok
+	}
+	page := StatusPage{
+		Slug:          p.Slug,
+		Title:         p.Title,
+		Description:   p.Description,
+		FooterText:    p.FooterText,
+		Theme:         nonEmptyTheme(p.Theme),
+		AccentColor:   normalizeHexColor(p.AccentColor),
+		Locale:        p.Locale,
+		Published:     p.Published,
+		AllowIndexing: p.AllowIndexing,
+	}
+	// The password cannot travel — the export carries no hash, by design — and
+	// creating the page published would make a protected page public, the one
+	// change to it nobody would make on purpose. It lands as a draft instead.
+	if p.HasPassword {
+		page.Published = false
+		warnings = append(warnings, "status page "+p.Slug+
+			": was password-protected; imported unpublished without a password — set one before publishing it")
+	}
+	for _, g := range p.Groups {
+		page.Groups = append(page.Groups, StatusPageGroup{Name: g.Name, SortOrder: g.SortOrder})
+	}
+	if len(p.Layout) > 0 {
+		for _, e := range p.Layout {
+			if id, ok := resolve(e.Monitor); ok {
+				page.Monitors = append(page.Monitors, StatusPageMonitorEntry{
+					MonitorID: id, GroupName: e.Group, SortOrder: e.SortOrder, ShowUptime: e.ShowUptime,
+				})
+			}
+		}
+		return page, warnings
+	}
+	// A bundle from before Layout existed: flat, every uptime shown, which is
+	// what such a page looked like.
+	for _, name := range p.Monitors {
+		if id, ok := resolve(name); ok {
+			page.MonitorIDs = append(page.MonitorIDs, id)
+		}
+	}
+	return page, warnings
 }
 
 // configEncrypted reports whether cfg is a sealed secrets envelope

@@ -8,7 +8,12 @@ package importexport
 import "encoding/json"
 
 // BundleVersion is the current export schema version.
-const BundleVersion = 1
+//
+// 2 added the status-page protection flag and layout. It was bumped rather
+// than left additive on purpose: a version-1 reader ignores has_password and
+// would import a protected page as public, so an older server has to refuse
+// these bundles. Version-1 bundles are still read.
+const BundleVersion = 2
 
 // Bundle is a full configuration export.
 type Bundle struct {
@@ -64,11 +69,37 @@ type TagSpec struct {
 
 // StatusPageSpec is a portable status-page definition.
 type StatusPageSpec struct {
-	Slug        string   `json:"slug"`
-	Title       string   `json:"title"`
-	Description string   `json:"description,omitempty"`
-	FooterText  string   `json:"footer_text,omitempty"`
-	Theme       string   `json:"theme,omitempty"`
-	Published   bool     `json:"published"`
-	Monitors    []string `json:"monitors,omitempty"` // monitor names
+	Slug        string `json:"slug"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+	FooterText  string `json:"footer_text,omitempty"`
+	Theme       string `json:"theme,omitempty"`
+	AccentColor string `json:"accent_color,omitempty"`
+	Locale      string `json:"locale,omitempty"`
+	Published   bool   `json:"published"`
+	// HasPassword records that the page was password-protected. The hash itself
+	// is never exported, so the importer cannot restore the protection and
+	// creates such a page unpublished instead of public.
+	HasPassword   bool                  `json:"has_password,omitempty"`
+	AllowIndexing bool                  `json:"allow_indexing"`
+	Monitors      []string              `json:"monitors,omitempty"` // monitor names, in display order
+	Groups        []StatusPageGroupSpec `json:"groups,omitempty"`
+	// Layout places each monitor in a group and carries its uptime visibility.
+	// Monitors stays alongside it so a reader that predates Layout still gets
+	// the page's monitors; when Layout is present it wins.
+	Layout []StatusPageEntrySpec `json:"layout,omitempty"`
+}
+
+// StatusPageGroupSpec is a named block of monitors on a status page.
+type StatusPageGroupSpec struct {
+	Name      string `json:"name"`
+	SortOrder int    `json:"sort_order"`
+}
+
+// StatusPageEntrySpec places one monitor (by name) on a status page.
+type StatusPageEntrySpec struct {
+	Monitor    string `json:"monitor"`
+	Group      string `json:"group,omitempty"` // group name; empty is ungrouped
+	SortOrder  int    `json:"sort_order"`
+	ShowUptime bool   `json:"show_uptime"`
 }
