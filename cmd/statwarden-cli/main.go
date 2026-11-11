@@ -454,7 +454,7 @@ func runMonitorCreate(ctx context.Context, args []string) error {
 	if cf.asJSON {
 		return writeJSON(os.Stdout, m)
 	}
-	fmt.Printf("Created monitor %d (%s).\n\n", m.ID, m.Name)
+	fmt.Printf("Created monitor %d (%s).\n\n", m.ID, terminalSafe(m.Name))
 	return writeMonitorDetail(os.Stdout, m)
 }
 
@@ -519,7 +519,7 @@ func runMonitorDelete(ctx context.Context, args []string) error {
 		// prompts — including the ones that mean it.
 		ok, err := confirm(fmt.Sprintf(
 			"Move monitor %d (%s) to the recycle bin? Its history is kept and it can "+
-				"be restored from the dashboard.", m.ID, m.Name))
+				"be restored from the dashboard.", m.ID, terminalSafe(m.Name)))
 		if err != nil {
 			return err
 		}

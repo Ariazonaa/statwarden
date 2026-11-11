@@ -103,6 +103,8 @@ func (e *APIError) Error() string {
 	if msg == "" {
 		msg = http.StatusText(e.Status)
 	}
+	// Server text, printed to the operator's terminal on every failure.
+	msg = terminalSafe(msg)
 	switch e.Status {
 	case http.StatusUnauthorized:
 		// The generic server text is the single most likely first-run
