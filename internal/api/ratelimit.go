@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -194,8 +195,29 @@ func (l *lockout) reset(key string) {
 	delete(l.fails, key)
 }
 
+// rateLimitAddr is the client identity the abuse brakes count against: the IPv4
+// address itself, or the /64 an IPv6 address sits in.
+//
+// A /64 is the smallest block an IPv6 subscriber is normally given, and every
+// address in it is theirs to use — privacy extensions rotate through it on their
+// own. Counting individual IPv6 addresses therefore handed one client 2^64
+// separate login budgets and lockout buckets, which is the same as having none.
+// Only the brakes use this; audit entries and sessions keep the full address.
+func rateLimitAddr(ip string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	addr = addr.WithZone("").Unmap()
+	if addr.Is4() {
+		return addr.String()
+	}
+	return netip.PrefixFrom(addr, 64).Masked().String()
+}
+
 // loginKey is the lockout bucket for one login attempt: the identifier as
-// typed, case-folded, plus the client IP. Folding matters because the login
+// typed, case-folded, plus the client address as rateLimitAddr groups it (an
+// IPv6 client is its /64). Folding matters because the login
 // itself resolves an address or username case-insensitively, so "Bob@x" and
 // "bob@x" must not be two budgets.
 //
@@ -206,5 +228,5 @@ func (l *lockout) reset(key string) {
 // identifiers in distinct buckets.
 func loginKey(login, ip string) string {
 	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(login))))
-	return hex.EncodeToString(sum[:]) + "|" + ip
+	return hex.EncodeToString(sum[:]) + "|" + rateLimitAddr(ip)
 }

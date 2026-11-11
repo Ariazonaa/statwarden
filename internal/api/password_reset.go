@@ -44,7 +44,7 @@ func (s *server) handleRequestPasswordReset(w http.ResponseWriter, r *http.Reque
 	// Tighter than the 60/min the public group already applies: this endpoint is
 	// an outbound-mail amplifier pointed at a third party's inbox, so it gets the
 	// same 10/min brake the login endpoint uses.
-	if !s.loginLimiter.allow("reset:" + clientIP(r)) {
+	if !s.loginLimiter.allow("reset:" + rateLimitAddr(clientIP(r))) {
 		writeProblemDetail(w, http.StatusTooManyRequests, "too many reset requests, slow down")
 		return
 	}
@@ -169,7 +169,7 @@ func (s *server) sendPasswordResetMail(ctx context.Context, email, token string)
 // would mean that reading the mailbox is enough to be authenticated; requiring
 // the new password to be used keeps the credential the thing that grants access.
 func (s *server) handleConfirmPasswordReset(w http.ResponseWriter, r *http.Request) {
-	if !s.loginLimiter.allow("reset-confirm:" + clientIP(r)) {
+	if !s.loginLimiter.allow("reset-confirm:" + rateLimitAddr(clientIP(r))) {
 		writeProblemDetail(w, http.StatusTooManyRequests, "too many attempts, slow down")
 		return
 	}

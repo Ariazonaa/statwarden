@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"slices"
 	"testing"
@@ -80,5 +81,55 @@ func TestTOTPVerifyRefusesOnceTwoFactorIsEnabled(t *testing.T) {
 	}
 	if !slices.Equal(before.BackupCodes, after.BackupCodes) {
 		t.Fatal("the backup codes were replaced by a verify call on an already-enabled account")
+	}
+}
+
+// One IPv6 subscriber is handed a whole /64 — eighteen quintillion addresses
+// that each looked like a separate client to the per-IP login limiter and the
+// (login, IP) lockout. Walking the low 64 bits gave an attacker a fresh budget on
+// every request, so neither brake ever engaged.
+func TestLoginBrakesTreatAnIPv6Slash64AsOneClient(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin()
+
+	got429 := false
+	for i := 1; i <= 25; i++ {
+		peer := fmt.Sprintf("[2001:db8:1:2::%x]:40000", i)
+		rec := h.requestFrom(http.MethodPost, "/api/v1/auth/login",
+			loginRequest{Email: "admin@example.com", Password: "wrong-password"}, peer)
+		if rec.Code == http.StatusTooManyRequests {
+			got429 = true
+			break
+		}
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d = %d, want 401 or 429", i, rec.Code)
+		}
+	}
+	if !got429 {
+		t.Fatal("25 failed logins from one /64 never hit a 429: every address got its own budget")
+	}
+
+	// A different /64 is a different client and still gets in.
+	rec := h.requestFrom(http.MethodPost, "/api/v1/auth/login",
+		loginRequest{Email: "admin@example.com", Password: "supersecret"}, "[2001:db8:1:3::1]:40000")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login from a neighbouring /64 = %d, want 200", rec.Code)
+	}
+}
+
+func TestRateLimitAddr(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"203.0.113.9", "203.0.113.9"},
+		{"2001:db8:1:2::1", "2001:db8:1:2::/64"},
+		{"2001:db8:1:2:ffff:ffff:ffff:ffff", "2001:db8:1:2::/64"},
+		{"::ffff:203.0.113.9", "203.0.113.9"},
+		// Not an address at all (an unparsable RemoteAddr): passed through, so
+		// it still gets a bucket of its own rather than sharing one with
+		// everything else that failed to parse.
+		{"pipe", "pipe"},
+	} {
+		if got := rateLimitAddr(tc.in); got != tc.want {
+			t.Errorf("rateLimitAddr(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
