@@ -4,8 +4,7 @@
 // The job is deliberately self-contained: it depends only on a small Store
 // interface, so the scheduling logic is unit-tested against an in-memory fake
 // with an injectable clock and never needs a live database. The production
-// implementation lives in pgstore.go and is a thin wrapper over the
-// sqlc-generated DeleteHeartbeatsBefore query.
+// implementation lives in pgstore.go: hand-written, batched deletes.
 package retention
 
 import (
@@ -207,9 +206,9 @@ func (p *Pruner) loop(ctx context.Context) {
 // The three passes are independent, and that independence runs BOTH ways. The
 // heartbeat pass used to return early on error, which took the delivery pass
 // with it — so the statement most likely to fail decided whether the other one
-// ran at all. PruneBefore is a single unbounded DELETE over the largest table in
-// the schema, so a statement timeout or lock contention hits it long before it
-// hits the delivery log; the result was a delivery log that grew without bound
+// ran at all. PruneBefore works on the largest table in the schema (it was one
+// unbounded DELETE then; it is batched now), so a statement timeout or lock
+// contention hits it long before it hits the delivery log; the result was a delivery log that grew without bound
 // for as long as the heartbeat delete kept failing, with nothing in the log
 // saying so.
 //

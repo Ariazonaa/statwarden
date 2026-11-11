@@ -4,28 +4,55 @@ import (
 	"context"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/Ariazonaa/statwarden/internal/db/sqlcgen"
 )
 
-// PgStore implements Store against PostgreSQL through the sqlc-generated
-// DeleteHeartbeatsBefore query.
+// PgStore implements Store against PostgreSQL with hand-written statements.
 type PgStore struct {
-	q *sqlcgen.Queries
-	// pool backs the hand-written delivery prune; see PruneDeliveriesBefore.
 	pool *pgxpool.Pool
 }
 
 // NewPgStore wraps a pgx pool in a Store.
 func NewPgStore(pool *pgxpool.Pool) *PgStore {
-	return &PgStore{q: sqlcgen.New(pool), pool: pool}
+	return &PgStore{pool: pool}
 }
 
-// PruneBefore implements Store.
+// heartbeatPruneBatch is how many heartbeats one DELETE removes. A variable so
+// the integration test can force several batches out of a handful of rows.
+var heartbeatPruneBatch = 10_000
+
+// PruneBefore implements Store, in batches.
+//
+// It used to be one unbounded DELETE (the sqlc DeleteHeartbeatsBefore query).
+// On a first pass after an upgrade, or after retention was shortened, that is
+// millions of rows in a single transaction: one long-held lock set, a burst of
+// WAL the replicas and the backup volume both have to absorb at once, and
+// nothing for autovacuum to reclaim until the very end — on the table every
+// check writes to. Batches commit as they go, so each holds its locks briefly
+// and the space becomes reusable while the pass is still running. The pass
+// stops between batches when ctx is cancelled, so shutdown does not wait for it.
+//
+// Two placeholders, two args: $1 cutoff, $2 batch size. The inner SELECT is
+// served by heartbeats_checked_at_brin_idx (migration 0021).
 func (s *PgStore) PruneBefore(ctx context.Context, cutoff time.Time) (int64, error) {
-	return s.q.DeleteHeartbeatsBefore(ctx, pgtype.Timestamptz{Time: cutoff, Valid: true})
+	var total int64
+	for {
+		ct, err := s.pool.Exec(ctx,
+			`DELETE FROM heartbeats
+			  WHERE id IN (SELECT id FROM heartbeats WHERE checked_at < $1 LIMIT $2)`,
+			cutoff, heartbeatPruneBatch)
+		if err != nil {
+			return total, err
+		}
+		n := ct.RowsAffected()
+		total += n
+		if n < int64(heartbeatPruneBatch) {
+			return total, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+	}
 }
 
 // PruneDeliveriesBefore implements Store.

@@ -73,7 +73,7 @@ test:
 # 25 minutes is headroom, not a blank cheque: a genuinely hung test still fails
 # instead of running until the job is killed.
 test-integration:
-	DATABASE_URL="$(INTEGRATION_DATABASE_URL)" go test -tags=integration -timeout=25m -count=1 ./internal/api/... ./internal/monitor/... ./internal/backup/...
+	DATABASE_URL="$(INTEGRATION_DATABASE_URL)" go test -tags=integration -timeout=25m -count=1 ./internal/api/... ./internal/monitor/... ./internal/backup/... ./internal/retention/...
 
 ## vet: run go vet
 vet:
