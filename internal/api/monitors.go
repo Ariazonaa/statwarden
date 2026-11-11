@@ -577,6 +577,12 @@ func (s *server) canonicalConfigKeys(typ string, cfg json.RawMessage) error {
 	// Sorted so the same request always names the same key in its error.
 	sort.Strings(keys)
 	for i, k := range keys {
+		// The at-rest envelope's own key. The sealer refuses a config that
+		// carries it as already encrypted, and an unsealed one (DEV_MODE) is
+		// taken for an envelope by every reader. Folded, like the rest.
+		if strings.EqualFold(k, "$encrypted") {
+			return fmt.Errorf("key %q is reserved", k)
+		}
 		for _, name := range known {
 			if k != name && strings.EqualFold(k, name) {
 				return fmt.Errorf("key %q must be written as %q", k, name)

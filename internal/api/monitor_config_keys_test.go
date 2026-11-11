@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Ariazonaa/statwarden/internal/domain"
+	"github.com/Ariazonaa/statwarden/internal/notify/secrets"
 )
 
 // hostChecker is a checker whose target is "host", the shape the socket-family
@@ -126,5 +127,28 @@ func TestCanonicalConfigKeysAreAccepted(t *testing.T) {
 	}, admin)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("canonical keys = %d, want 201; body %s", rec.Code, rec.Body.String())
+	}
+}
+
+// "$encrypted" is the at-rest envelope's own key. A config carrying it is
+// refused by the sealer as "already encrypted", which surfaced as a 500, and
+// in DEV_MODE it was stored as plaintext that every reader then takes for a
+// sealed envelope. encoding/json matches the key case-insensitively, so every
+// spelling is refused.
+func TestMonitorConfigCannotCarryTheEnvelopeKey(t *testing.T) {
+	box, err := secrets.New("envelope-key-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range []*harness{newHarness(t), newHarnessWithBox(t, box)} {
+		admin := h.setupAdmin()
+		for _, cfg := range []string{`{"$encrypted":"abc"}`, `{"$Encrypted":"abc","url":"https://example.test"}`} {
+			rec := h.requestWith(http.MethodPost, "/api/v1/monitors", monitorRequest{
+				Name: "m", Type: "fake", Interval: 60, Config: json.RawMessage(cfg),
+			}, admin)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("config %s = %d, want 400; body %s", cfg, rec.Code, rec.Body.String())
+			}
+		}
 	}
 }
