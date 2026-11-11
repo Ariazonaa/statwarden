@@ -6,6 +6,7 @@
 	import { t } from '$lib/i18n';
 	import { GlassPanel, PillButton, TextField, toast } from '$lib/design-system';
 
+	let setupToken = $state('');
 	let username = $state('admin');
 	let email = $state('');
 	let password = $state('');
@@ -26,7 +27,11 @@
 		confirm && confirm !== password ? t('setup.passwordsMismatch') : undefined
 	);
 	const valid = $derived(
-		username.trim() !== '' && email.trim() !== '' && password.length >= 8 && confirm === password
+		setupToken.trim() !== '' &&
+			username.trim() !== '' &&
+			email.trim() !== '' &&
+			password.length >= 8 &&
+			confirm === password
 	);
 
 	async function submit(e: SubmitEvent) {
@@ -35,7 +40,7 @@
 		loading = true;
 		error = undefined;
 		try {
-			const user = await api.setup({ username, email, password });
+			const user = await api.setup({ username, email, password, setupToken });
 			session.setUser(user);
 			toast.success(t('setup.created'));
 			await goto('/dashboard');
@@ -56,6 +61,14 @@
 		<p class="lead">{t('setup.lead')}</p>
 
 		<form onsubmit={submit} class="form">
+			<TextField
+				label={t('setup.token')}
+				bind:value={setupToken}
+				autocomplete="off"
+				spellcheck="false"
+				hint={t('setup.tokenHint')}
+				required
+			/>
 			<TextField
 				label={t('setup.username')}
 				bind:value={username}

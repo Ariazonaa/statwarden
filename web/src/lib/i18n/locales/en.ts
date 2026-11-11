@@ -207,6 +207,9 @@ export const en = {
 	'setup.email': 'Email',
 	'setup.password': 'Password',
 	'setup.passwordHint': 'At least 8 characters.',
+	'setup.token': 'Setup token',
+	'setup.tokenHint':
+		'Printed in the server log at startup (docker compose logs statwarden | grep "setup token"), or the SETUP_TOKEN you configured.',
 	'setup.passwordTooShort': 'Use at least 8 characters.',
 	'setup.confirmPassword': 'Confirm password',
 	'setup.passwordsMismatch': 'Passwords do not match.',

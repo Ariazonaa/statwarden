@@ -208,6 +208,9 @@ export const de: Messages = {
 	'setup.email': 'E-Mail',
 	'setup.password': 'Passwort',
 	'setup.passwordHint': 'Mindestens 8 Zeichen.',
+	'setup.token': 'Setup-Token',
+	'setup.tokenHint':
+		'Steht beim Start im Server-Log (docker compose logs statwarden | grep "setup token") oder ist das von dir gesetzte SETUP_TOKEN.',
 	'setup.passwordTooShort': 'Verwende mindestens 8 Zeichen.',
 	'setup.confirmPassword': 'Passwort bestätigen',
 	'setup.passwordsMismatch': 'Passwörter stimmen nicht überein.',
