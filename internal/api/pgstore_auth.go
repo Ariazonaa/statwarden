@@ -135,3 +135,17 @@ func (s *PgStore) ConsumePasswordReset(ctx context.Context, tokenHash, passwordH
 	}
 	return r, nil
 }
+
+// PasswordResetRedeemable implements Store. The predicate is the one
+// ConsumePasswordReset's UPDATE uses, as a read; it takes no lock because the
+// redemption re-checks under its own.
+func (s *PgStore) PasswordResetRedeemable(ctx context.Context, tokenHash string, now time.Time) (bool, error) {
+	var ok bool
+	// $1 token_hash, $2 now — two placeholders, two args.
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM password_resets
+			WHERE token_hash = $1 AND used_at IS NULL AND expires_at > $2
+		)`, tokenHash, now).Scan(&ok)
+	return ok, mapErr(err)
+}

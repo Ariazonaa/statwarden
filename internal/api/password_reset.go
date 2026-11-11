@@ -188,7 +188,17 @@ func (s *server) handleConfirmPasswordReset(w http.ResponseWriter, r *http.Reque
 		writeProblemDetail(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	hash, err := auth.HashPassword(req.NewPassword)
+	// The token is looked at BEFORE the password is hashed. This endpoint is
+	// unauthenticated, and hashing first meant any made-up token bought a full
+	// argon2 derivation. A store error is answered like a bad token: the
+	// redemption below would fail the same way, and this answer must not differ
+	// by whether a token exists.
+	tokenHash := auth.HashToken(token)
+	if ok, err := s.store.PasswordResetRedeemable(r.Context(), tokenHash, s.now()); err != nil || !ok {
+		writeProblemDetail(w, http.StatusBadRequest, invalidResetTokenDetail)
+		return
+	}
+	hash, err := hashNewPassword(req.NewPassword)
 	if err != nil {
 		writeProblemDetail(w, http.StatusInternalServerError, "hash password")
 		return
@@ -197,7 +207,7 @@ func (s *server) handleConfirmPasswordReset(w http.ResponseWriter, r *http.Reque
 	// The store marks the token used and writes the password in one transaction,
 	// so the token cannot be redeemed twice under concurrency, and invalidates
 	// the user's other outstanding tokens so a stale mail cannot be replayed.
-	reset, err := s.store.ConsumePasswordReset(r.Context(), auth.HashToken(token), hash, s.now())
+	reset, err := s.store.ConsumePasswordReset(r.Context(), tokenHash, hash, s.now())
 	if err != nil {
 		// Unknown, expired and already-used all arrive here as ErrNotFound and
 		// are answered identically.
@@ -265,3 +275,7 @@ const (
 
 // invalidResetTokenDetail is the single message every token failure produces.
 const invalidResetTokenDetail = "invalid or expired reset token"
+
+// hashNewPassword is auth.HashPassword behind a variable so a test can see
+// whether the confirm handler reached the KDF at all.
+var hashNewPassword = auth.HashPassword

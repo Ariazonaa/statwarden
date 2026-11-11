@@ -133,3 +133,41 @@ func TestRateLimitAddr(t *testing.T) {
 		}
 	}
 }
+
+// password-reset/confirm is unauthenticated, and it used to run the argon2 hash
+// of the new password BEFORE looking at the token — so any caller with a made-up
+// token got the server to spend a full KDF derivation, the most expensive thing
+// it does, per request. The token is checked first now; only a redeemable one
+// earns the hash.
+func TestResetConfirmChecksTheTokenBeforeHashing(t *testing.T) {
+	h := newHarness(t)
+	h.setupAdmin()
+
+	calls := 0
+	orig := hashNewPassword
+	hashNewPassword = func(pw string) (string, error) {
+		calls++
+		return orig(pw)
+	}
+	t.Cleanup(func() { hashNewPassword = orig })
+
+	rec := h.request(http.MethodPost, "/api/v1/auth/password-reset/confirm",
+		passwordResetConfirmRequest{Token: "made-up-token", NewPassword: "a-long-new-password"})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("confirm with an unknown token = %d, want 400", rec.Code)
+	}
+	if calls != 0 {
+		t.Fatalf("the new password was hashed %d time(s) for a token that does not exist", calls)
+	}
+
+	// A real token still works, and is hashed exactly once.
+	h.requestReset("admin@example.com")
+	rec = h.request(http.MethodPost, "/api/v1/auth/password-reset/confirm",
+		passwordResetConfirmRequest{Token: h.lastResetToken(), NewPassword: "a-long-new-password"})
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("confirm with a real token = %d, body %s", rec.Code, rec.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("hashed %d times for one redemption, want 1", calls)
+	}
+}

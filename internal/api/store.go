@@ -317,6 +317,12 @@ type passwordResetStore interface {
 	// every failure mode, so a caller cannot learn that a token ever existed.
 	// Session invalidation stays with the caller (DeleteSessionsByUser).
 	ConsumePasswordReset(ctx context.Context, tokenHash, passwordHash string, now time.Time) (PasswordReset, error)
+	// PasswordResetRedeemable reports whether a token exists, is unused and has
+	// not expired, without redeeming it. The confirm handler asks before it
+	// hashes the new password, so a made-up token costs a lookup rather than an
+	// argon2 derivation. It is an early exit only: ConsumePasswordReset re-checks
+	// atomically, and a token redeemed in between still loses there.
+	PasswordResetRedeemable(ctx context.Context, tokenHash string, now time.Time) (bool, error)
 }
 
 type monitorStore interface {
