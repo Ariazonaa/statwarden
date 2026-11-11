@@ -269,16 +269,27 @@ func (s *server) notificationFromRequest(req notificationRequest) (Notification,
 	}, nil
 }
 
-// redactConfig hides an encrypted config envelope from API responses; a
-// plaintext (DEV_MODE) config is returned as-is.
+// redactConfig hides a channel config from API responses behind the
+// {"$encrypted":true} marker. Only an empty config, which holds nothing, is
+// returned as it is.
+//
+// It used to mask the sealed envelope only and pass plaintext through, on the
+// theory that plaintext meant DEV_MODE. It also means a row written before
+// at-rest encryption existed, or restored from an old backup — and those
+// channels then showed their bot tokens and SMTP passwords to every viewer,
+// while the sealed ones beside them were hidden. Whether a secret is shown
+// cannot depend on how it happens to be stored. The update path already treats
+// an absent config as "keep the stored one" and seals it on the way back in, so
+// nothing an editor needs is lost.
 func redactConfig(cfg json.RawMessage) json.RawMessage {
-	var env struct {
-		Encrypted string `json:"$encrypted"`
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(cfg, &probe); err == nil && len(probe) == 0 {
+		return cfg
 	}
-	if err := json.Unmarshal(cfg, &env); err == nil && env.Encrypted != "" {
-		return json.RawMessage(`{"$encrypted":true}`)
+	if len(cfg) == 0 {
+		return cfg
 	}
-	return cfg
+	return json.RawMessage(`{"$encrypted":true}`)
 }
 
 // openNotificationConfig unseals a stored channel config. With no box
