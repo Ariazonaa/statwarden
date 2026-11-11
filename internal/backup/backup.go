@@ -73,6 +73,11 @@ type Options struct {
 	// MaxAge deletes dumps older than this. Zero disables age-based pruning and
 	// leaves Keep as the only rule.
 	MaxAge time.Duration
+	// Timeout bounds one pg_dump run. Zero means one Interval, with
+	// defaultDumpTimeout when Interval is unset: a dump still running when the
+	// next one is due is stuck, not slow, and the ticker would only drop ticks
+	// behind it.
+	Timeout time.Duration
 	// Logger is required in practice; nil falls back to slog.Default.
 	Logger *slog.Logger
 	// Now defaults to time.Now, and exists so tests can name files
@@ -89,10 +94,14 @@ type Runner struct {
 	interval    time.Duration
 	keep        int
 	maxAge      time.Duration
+	timeout     time.Duration
 	log         *slog.Logger
 	now         func() time.Time
 	dumpCmd     string
 }
+
+// defaultDumpTimeout bounds a dump when neither Timeout nor Interval is set.
+const defaultDumpTimeout = time.Hour
 
 // New builds a Runner. It does not touch the filesystem.
 func New(o Options) *Runner {
@@ -108,12 +117,19 @@ func New(o Options) *Runner {
 	if o.Keep < 1 {
 		o.Keep = 1
 	}
+	if o.Timeout <= 0 {
+		o.Timeout = o.Interval
+	}
+	if o.Timeout <= 0 {
+		o.Timeout = defaultDumpTimeout
+	}
 	return &Runner{
 		databaseURL: o.DatabaseURL,
 		dir:         o.Dir,
 		interval:    o.Interval,
 		keep:        o.Keep,
 		maxAge:      o.MaxAge,
+		timeout:     o.Timeout,
 		log:         o.Logger.With("job", JobName),
 		now:         o.Now,
 		dumpCmd:     o.dumpCmd,
@@ -165,8 +181,31 @@ func (r *Runner) loop(ctx context.Context) {
 	r.log.Info("backup job started",
 		"dir", r.dir, "interval", r.interval.String(), "keep", r.keep, "max_age", r.maxAge.String())
 
-	// One pass immediately, matching the retention pruner and the rollup job: an
-	// instance that restarts often would otherwise never reach its first dump.
+	// Nothing of ours is mid-dump yet, so anything unfinished and older than a
+	// dump may take was left by a process that died while writing it.
+	_ = safego.Do(r.log, "backup partial cleanup", func() {
+		if n := r.removeStalePartials(); n > 0 {
+			r.log.Info("removed unfinished dumps left by an earlier process", "count", n)
+		}
+	})
+
+	// The schedule continues from the newest finished dump rather than from
+	// this process's start. Dumping on every start meant an instance that
+	// restarted often wrote a full dump per restart, all inside the age window,
+	// so pruning removed none of them. An instance whose last dump is overdue —
+	// or that has none — still dumps at once, so a frequently restarted one
+	// cannot starve its first dump either.
+	if wait := r.firstDelay(); wait > 0 {
+		r.log.Info("next backup scheduled from the newest existing dump", "in", wait.Round(time.Second).String())
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			r.log.Info("backup job stopped")
+			return
+		case <-timer.C:
+		}
+	}
 	_ = safego.Do(r.log, "backup pass", func() { r.runOnce(ctx) })
 
 	ticker := time.NewTicker(r.interval)
@@ -184,6 +223,57 @@ func (r *Runner) loop(ctx context.Context) {
 			_ = safego.Do(r.log, "backup pass", func() { r.runOnce(ctx) })
 		}
 	}
+}
+
+// firstDelay is how long to wait before the first dump: the rest of the
+// interval since the newest finished dump, zero when there is none or it is
+// overdue, and never more than one interval — a dump stamped in the future
+// (a clock stepped back) must not postpone backups indefinitely.
+func (r *Runner) firstDelay() time.Duration {
+	files, err := r.list()
+	if err != nil || len(files) == 0 || r.interval <= 0 {
+		return 0
+	}
+	newest := files[0].stamp
+	for _, f := range files[1:] {
+		if f.stamp.After(newest) {
+			newest = f.stamp
+		}
+	}
+	wait := r.interval - r.now().Sub(newest)
+	if wait <= 0 {
+		return 0
+	}
+	return min(wait, r.interval)
+}
+
+// removeStalePartials deletes this job's unfinished dumps that are older than a
+// dump is allowed to take, and returns how many it removed. Only names this job
+// writes are touched; the directory is a mounted volume and may hold anything.
+func (r *Runner) removeStalePartials() int {
+	entries, err := os.ReadDir(r.dir)
+	if err != nil {
+		return 0
+	}
+	cutoff := time.Now().Add(-r.timeout)
+	removed := 0
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, fileExt+partialExt) {
+			continue
+		}
+		if _, ok := parseStamp(strings.TrimSuffix(name, partialExt)); !ok {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || !info.ModTime().Before(cutoff) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(r.dir, name)); err == nil {
+			removed++
+		}
+	}
+	return removed
 }
 
 // runOnce takes one dump and prunes, reporting the pass to metrics either way.
@@ -240,6 +330,12 @@ func (r *Runner) Dump(ctx context.Context) (string, error) {
 	// dump runs. The pgxpool-only settings are dropped as well, because libpq
 	// refuses URI parameters it does not know.
 	conn, password := splitPassword(db.PortableConnString(r.databaseURL))
+
+	// Bounded: a pg_dump blocked on a lock or a server that stopped answering
+	// would otherwise hold the job — and its .partial — for the life of the
+	// process. CommandContext kills it when the budget runs out.
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
 
 	// --no-owner/--no-acl so the dump restores into a database owned by whoever
 	// is restoring it, rather than demanding the original role exist. That is

@@ -24,6 +24,10 @@ type fakeDumpRecord struct {
 }
 
 func TestMain(m *testing.M) {
+	if os.Getenv(fakeDumpEnv) == "hang" {
+		time.Sleep(time.Minute)
+		os.Exit(0)
+	}
 	if os.Getenv(fakeDumpEnv) == "1" {
 		_ = json.NewEncoder(os.Stdout).Encode(fakeDumpRecord{
 			Args:       os.Args[1:],
@@ -106,6 +110,97 @@ func TestSplitPasswordKeywordForm(t *testing.T) {
 	conn, pw = splitPassword("host=db.example.test password=plain user=sw")
 	if pw != "plain" || strings.Contains(conn, "plain") {
 		t.Errorf("unquoted password: conn=%q pw=%q", conn, pw)
+	}
+}
+
+// TestFirstPassRespectsTheNewestDump pins that a restart does not dump again.
+//
+// The first pass used to run unconditionally at startup, so an instance that
+// restarted a few times a day — a crash loop, a host doing updates, an operator
+// iterating on config — wrote a dump per restart. All of them sat inside
+// BACKUP_MAX_AGE_DAYS, so pruning removed none and the volume grew by one full
+// dump per restart. The schedule now continues from the newest finished dump.
+func TestFirstPassRespectsTheNewestDump(t *testing.T) {
+	now := at(2026, 8, 13, 12)
+	cases := []struct {
+		name  string
+		dumps []time.Time
+		want  time.Duration
+	}{
+		{"no dump yet runs at once", nil, 0},
+		{"recent dump waits for the rest of the interval", []time.Time{now.Add(-2 * time.Hour), now.Add(-30 * time.Hour)}, 22 * time.Hour},
+		{"overdue dump runs at once", []time.Time{now.Add(-30 * time.Hour)}, 0},
+		// A clock that went backwards must not postpone the next dump by more
+		// than one interval.
+		{"dump from the future waits one interval at most", []time.Time{now.Add(5 * time.Hour)}, 24 * time.Hour},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, d := range tc.dumps {
+				touch(t, dir, d)
+			}
+			r := New(Options{Dir: dir, Interval: 24 * time.Hour, Now: func() time.Time { return now }})
+			if got := r.firstDelay(); got != tc.want {
+				t.Fatalf("firstDelay = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestStalePartialsAreRemoved pins the cleanup of dumps that never finished. A
+// process killed mid-dump (OOM, SIGKILL after the stop timeout, power loss)
+// leaves its .partial behind; nothing listed those, so each one stayed on the
+// volume forever. One still being written — younger than the dump timeout — is
+// left alone, and so is anything this job did not name.
+func TestStalePartialsAreRemoved(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	stale := filepath.Join(dir, FilePrefix+"20260101T000000Z"+fileExt+partialExt)
+	fresh := filepath.Join(dir, FilePrefix+"20260813T115900Z"+fileExt+partialExt)
+	foreign := filepath.Join(dir, "notes.partial")
+	for _, p := range []string{stale, fresh, foreign} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := now.Add(-3 * time.Hour)
+	for _, p := range []string{stale, foreign} {
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := New(Options{Dir: dir, Interval: time.Hour, Now: func() time.Time { return now }})
+	if n := r.removeStalePartials(); n != 1 {
+		t.Fatalf("removed %d partial dumps, want 1", n)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatal("the stale partial dump survived")
+	}
+	for _, p := range []string{fresh, foreign} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%s was removed: %v", filepath.Base(p), err)
+		}
+	}
+}
+
+// TestDumpIsBoundedByATimeout pins that a pg_dump that never returns — a lock
+// it waits on forever, a server that stopped answering mid-stream — cannot
+// stall the job for the life of the process. It is killed, and it leaves no
+// .partial behind.
+func TestDumpIsBoundedByATimeout(t *testing.T) {
+	r, dir := fakeDumpRunner(t, "postgres://sw@db.example.test/app")
+	t.Setenv(fakeDumpEnv, "hang")
+	r.timeout = 300 * time.Millisecond
+	start := time.Now()
+	if _, err := r.Dump(context.Background()); err == nil {
+		t.Fatal("a hanging pg_dump reported success")
+	}
+	if took := time.Since(start); took > 20*time.Second {
+		t.Fatalf("Dump returned after %s; the timeout did not bound it", took)
+	}
+	if n := names(t, dir); len(n) != 0 {
+		t.Fatalf("a timed-out dump left files behind: %v", n)
 	}
 }
 

@@ -328,8 +328,12 @@ up at the platform level — a managed database, or snapshots of the volume — 
 job that writes gigabytes should be a decision rather than a surprise.
 
 Turn them on with `BACKUP_ENABLED=true`. The job then writes a `pg_dump` in
-PostgreSQL's custom format (`-Fc`) into `BACKUP_DIR` every `BACKUP_INTERVAL_HOURS`,
-starting with one pass immediately at startup.
+PostgreSQL's custom format (`-Fc`) into `BACKUP_DIR` every `BACKUP_INTERVAL_HOURS`.
+The schedule continues from the newest dump already in the directory, so a
+restart does not add a dump; with none there, or the newest one overdue, the
+first runs at startup. One `pg_dump` may run for at most one interval before it
+is killed, and unfinished `.partial` files left by a crashed process are removed
+at the next start.
 
 | Variable | Default | Meaning |
 |---|---|---|
