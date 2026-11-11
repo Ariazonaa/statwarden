@@ -139,13 +139,19 @@ type PublicPageView struct {
 // the client whether now falls inside it. Only windows that are in effect now
 // or still ahead, and that cover a monitor on this page, are ever included.
 type PublicMaintenance struct {
-	ID         int64      `json:"id"`
-	Title      string     `json:"title"`
-	Body       string     `json:"body"`
-	StartsAt   *time.Time `json:"starts_at,omitempty"` // RFC3339, UTC; absent for an unbounded series
-	EndsAt     *time.Time `json:"ends_at,omitempty"`   // RFC3339, UTC; absent when open-ended
-	Active     bool       `json:"active"`              // now is within the window
-	MonitorIDs []int64    `json:"monitor_ids"`         // windows scoped to these monitors ([] = all)
+	ID    int64  `json:"id"`
+	Title string `json:"title"`
+	Body  string `json:"body"`
+	// StartsAt and EndsAt are the occurrence being announced — the one in effect
+	// now or the next one — not a recurring series' stored bounds.
+	StartsAt *time.Time `json:"starts_at,omitempty"` // RFC3339, UTC
+	EndsAt   *time.Time `json:"ends_at,omitempty"`   // RFC3339, UTC
+	Active   bool       `json:"active"`              // now is within the window
+	// AppliesToAll is the window's scope stated outright. MonitorIDs is empty
+	// for a fleet-wide window, but reading scope off an empty list is the
+	// convention migration 0019 retired everywhere else.
+	AppliesToAll bool    `json:"applies_to_all"`
+	MonitorIDs   []int64 `json:"monitor_ids"` // this page's monitors the window covers ([] when applies_to_all)
 }
 
 // resolvePublicPage finds the page for a request: an explicit {slug} path param,
@@ -835,21 +841,50 @@ func (s *server) pageMaintenance(ctx context.Context, page StatusPage, now time.
 		if !mw.Active {
 			continue
 		}
-		_, active := inEffect[mw.ID]
-		if !active && !upcoming(mw, now) {
-			continue
-		}
-		touches := mw.AppliesToAll
-		for _, id := range mw.MonitorIDs {
-			if _, ok := pageMons[id]; ok {
-				touches = true
-				break
+		// Only this page's monitors are named. The window's full list is the
+		// operator's internal scope and may name monitors no public page shows;
+		// echoing it published their ids to every visitor of every page the
+		// window touched.
+		ids := []int64{}
+		if !mw.AppliesToAll {
+			for _, id := range mw.MonitorIDs {
+				if _, ok := pageMons[id]; ok {
+					ids = append(ids, id)
+				}
+			}
+			if len(ids) == 0 {
+				continue
 			}
 		}
-		if !touches {
+		_, active := inEffect[mw.ID]
+		pm := toPublicMaintenance(mw, active)
+		pm.MonitorIDs = ids
+		ev, err := mw.toEvaluator()
+		if err != nil {
+			// The loader skips such a row too, so the engine never treats it as
+			// in effect; announcing it would contradict that.
 			continue
 		}
-		out = append(out, toPublicMaintenance(mw, active))
+		occStart, occEnd, ok, err := maintenance.NextOccurrence(ev, now)
+		if err != nil {
+			continue
+		}
+		if !active {
+			// A window that is not in effect is announced only while it still
+			// has an occurrence AHEAD. Once one has started, the evaluator alone
+			// decides whether it is running, as it does for alerting.
+			if !ok || !occStart.After(now) {
+				continue
+			}
+		}
+		if ok {
+			// The concrete occurrence, not the stored row. For a one-off they are
+			// the same; for a series the stored bounds delimit the series and are
+			// often absent, so the page said "scheduled" with no time at all.
+			occStart, occEnd = occStart.UTC(), occEnd.UTC()
+			pm.StartsAt, pm.EndsAt = &occStart, &occEnd
+		}
+		out = append(out, pm)
 		anyInEffect = anyInEffect || active
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -861,37 +896,25 @@ func (s *server) pageMaintenance(ctx context.Context, page StatusPage, now time.
 // toPublicMaintenance narrows a stored window to the visitor-facing subset,
 // stamping whether it is in effect right now. Recurrence, timezone and audit
 // timestamps are intentionally dropped: the public page only announces that a
-// window exists, when it runs and which monitors it covers. monitor_ids is
-// forced non-nil so the client can iterate it without a guard; an empty slice
-// (the window covers every monitor) stays an empty array, not null.
+// window exists, when it runs and which monitors it covers. pageMaintenance
+// then narrows monitor_ids to the page and replaces the bounds with the
+// concrete occurrence. monitor_ids is forced non-nil so the client can iterate
+// it without a guard.
 func toPublicMaintenance(mw MaintenanceWindow, active bool) PublicMaintenance {
 	ids := mw.MonitorIDs
 	if ids == nil {
 		ids = []int64{}
 	}
 	return PublicMaintenance{
-		ID:         mw.ID,
-		Title:      mw.Title,
-		Body:       mw.Description,
-		StartsAt:   mw.StartsAt,
-		EndsAt:     mw.EndsAt,
-		Active:     active,
-		MonitorIDs: ids,
+		ID:           mw.ID,
+		Title:        mw.Title,
+		Body:         mw.Description,
+		StartsAt:     mw.StartsAt,
+		EndsAt:       mw.EndsAt,
+		Active:       active,
+		AppliesToAll: mw.AppliesToAll,
+		MonitorIDs:   ids,
 	}
-}
-
-// upcoming reports whether a window that is not currently in effect still has
-// an occurrence ahead of it, and so is worth announcing. A recurring series
-// recurs until its ends_at (if any) passes; a one-off is upcoming only until it
-// starts, after which the evaluator alone decides.
-func upcoming(mw MaintenanceWindow, now time.Time) bool {
-	if mw.EndsAt != nil && !mw.EndsAt.After(now) {
-		return false
-	}
-	if mw.Strategy == maintenance.StrategyRecurring {
-		return true
-	}
-	return mw.StartsAt != nil && mw.StartsAt.After(now)
 }
 
 func startOrZero(t *time.Time) time.Time {
