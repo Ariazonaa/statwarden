@@ -1696,6 +1696,12 @@ const realApi: Api = {
 	// carrying a badge keeps the same token, so the URLs stay stable — and answers
 	// the token plus both public badge URLs. Revoke answers 204 and both URLs stop
 	// resolving.
+	// Mints a new push token and revokes the old one. The server keeps only a
+	// hash, so this response is the only place the token and URL ever appear.
+	regeneratePushToken: (id) =>
+		http<{ push_token: string; push_url: string }>('POST', `/monitors/${seg(id)}/push-token`).then(
+			(w) => ({ pushToken: w.push_token, pushUrl: w.push_url })
+		),
 	createMonitorBadge: (id) =>
 		http<WireMonitorBadge>('POST', `/monitors/${seg(id)}/badge`).then(monitorBadgeFromWire),
 	revokeMonitorBadge: (id) => http('DELETE', `/monitors/${seg(id)}/badge`),

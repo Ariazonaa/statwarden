@@ -30,6 +30,7 @@
 		TextField,
 		toast
 	} from '$lib/design-system';
+	import { rememberPushToken } from '$lib/util/push';
 
 	let {
 		existing,
@@ -250,6 +251,9 @@
 				await goto(`/monitors/${existing.id}`);
 			} else {
 				const created = await api.createMonitor(payload);
+				// The push token is in this response and nowhere else afterwards;
+				// the detail page shows it once.
+				if (created.pushToken) rememberPushToken(created.id, created.pushToken);
 				monitors.replace(created);
 				toast.success(t('monitorForm.created'));
 				await goto(`/monitors/${created.id}`);
