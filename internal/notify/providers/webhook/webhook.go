@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Ariazonaa/statwarden/internal/domain"
+	"github.com/Ariazonaa/statwarden/internal/notify/redact"
 	"github.com/Ariazonaa/statwarden/internal/notify/registry"
 
 	"github.com/Ariazonaa/statwarden/internal/httpx"
@@ -117,7 +118,7 @@ func (n *Notifier) Send(ctx context.Context, cfg json.RawMessage, event domain.N
 
 	req, err := http.NewRequestWithContext(ctx, method, c.URL, bytes.NewReader(raw))
 	if err != nil {
-		return fmt.Errorf("webhook: build request: %w", err)
+		return fmt.Errorf("webhook: build request: %w", redact.Error(err, c.URL))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Statwarden")
@@ -140,14 +141,18 @@ func (n *Notifier) Send(ctx context.Context, cfg json.RawMessage, event domain.N
 		Timeout:       n.client.Timeout,
 		CheckRedirect: httpx.StripCredentialsOnRedirect(maxRedirects, names),
 	}
+	// Errors name the host only. A webhook URL is frequently its own credential
+	// — a secret path segment, a token in the query — and these messages end
+	// up in the log, the delivery audit log and the test-send response.
+	target := redact.URL(c.URL)
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("webhook: POST %s: %w", c.URL, err)
+		return fmt.Errorf("webhook: %s %s: %w", method, target, redact.Error(err, c.URL))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("webhook: POST %s: unexpected status %s", c.URL, resp.Status)
+		return fmt.Errorf("webhook: %s %s: unexpected status %s", method, target, resp.Status)
 	}
 	return nil
 }
