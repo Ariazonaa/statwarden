@@ -28,6 +28,41 @@ const (
 	slaPageSize = 500
 )
 
+// Concurrency limits for report computation. The fleet-wide reports (SLA,
+// flakiest) read heartbeats for every monitor, a single-monitor report for one;
+// each kind has its own allowance so a running SLA export does not lock out a
+// monitor page, and neither can be multiplied by opening more connections.
+const (
+	maxConcurrentFleetReports   = 2
+	maxConcurrentMonitorReports = 8
+)
+
+// reportGate is a counting semaphore over report computations.
+type reportGate chan struct{}
+
+// fleetReports and monitorReports are process-wide on purpose: the database
+// they protect is shared by every server instance in the process.
+var (
+	fleetReports   = make(reportGate, maxConcurrentFleetReports)
+	monitorReports = make(reportGate, maxConcurrentMonitorReports)
+)
+
+// enter takes a slot or answers 503 and reports false. It does not queue: a
+// waiting request would still hold its connection, which is the resource the
+// limit exists to bound. The caller must defer g.leave() after a true result.
+func (g reportGate) enter(w http.ResponseWriter) bool {
+	select {
+	case g <- struct{}{}:
+		return true
+	default:
+		w.Header().Set("Retry-After", "10")
+		writeProblemDetail(w, http.StatusServiceUnavailable, "too many reports are being generated; try again shortly")
+		return false
+	}
+}
+
+func (g reportGate) leave() { <-g }
+
 // parseReportRange reads the requested window from the query string. It accepts
 // a named ?range= (24h, 7d, 30d, 1y) or an explicit ?from=&to= pair (RFC3339).
 // The default is the last 30 days.
@@ -100,6 +135,10 @@ func (s *server) handleMonitorUptime(w http.ResponseWriter, r *http.Request) {
 		writeProblemDetail(w, http.StatusBadRequest, rerr.Error())
 		return
 	}
+	if !monitorReports.enter(w) {
+		return
+	}
+	defer monitorReports.leave()
 	res, err := s.reporter.Uptime(r.Context(), id, rng)
 	if err != nil {
 		writeProblemDetail(w, http.StatusInternalServerError, "compute uptime")
@@ -126,6 +165,10 @@ func (s *server) handleMonitorReport(w http.ResponseWriter, r *http.Request) {
 		writeProblemDetail(w, http.StatusBadRequest, rerr.Error())
 		return
 	}
+	if !monitorReports.enter(w) {
+		return
+	}
+	defer monitorReports.leave()
 	rep, err := s.reporter.Report(r.Context(), id, rng)
 	if err != nil {
 		writeProblemDetail(w, http.StatusInternalServerError, "compute report")
@@ -152,6 +195,10 @@ func (s *server) handleFlakiest(w http.ResponseWriter, r *http.Request) {
 		writeProblemDetail(w, http.StatusBadRequest, rerr.Error())
 		return
 	}
+	if !fleetReports.enter(w) {
+		return
+	}
+	defer fleetReports.leave()
 	items, err := s.reporter.Flakiest(r.Context(), rng, limit)
 	if err != nil {
 		writeProblemDetail(w, http.StatusInternalServerError, "rank flakiest")
@@ -217,6 +264,10 @@ func (s *server) handleSLACSV(w http.ResponseWriter, r *http.Request) {
 		writeProblemDetail(w, http.StatusBadRequest, rerr.Error())
 		return
 	}
+	if !fleetReports.enter(w) {
+		return
+	}
+	defer fleetReports.leave()
 	rows, err := s.slaRows(r, rng)
 	if err != nil {
 		writeProblemDetail(w, http.StatusInternalServerError, "build SLA report")
@@ -242,6 +293,10 @@ func (s *server) handleSLAPDF(w http.ResponseWriter, r *http.Request) {
 		writeProblemDetail(w, http.StatusBadRequest, rerr.Error())
 		return
 	}
+	if !fleetReports.enter(w) {
+		return
+	}
+	defer fleetReports.leave()
 	rows, err := s.slaRows(r, rng)
 	if err != nil {
 		writeProblemDetail(w, http.StatusInternalServerError, "build SLA report")
