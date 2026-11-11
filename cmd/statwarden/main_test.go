@@ -65,6 +65,50 @@ func TestHTTPServerBoundsHeaderSize(t *testing.T) {
 	}
 }
 
+// TestShutdownStopsHTTPBeforeTheDispatcher pins the shutdown order.
+//
+// The push endpoint is an HTTP handler that emits state changes into the
+// dispatcher. With the dispatcher stopped first, a push that arrived during the
+// HTTP drain — a recovery, typically, from a cron job that just came back —
+// was accepted with 200 and its alert silently dropped. The server has to stop
+// taking requests before anything they feed is stopped.
+func TestShutdownStopsHTTPBeforeTheDispatcher(t *testing.T) {
+	pos := map[string]token.Pos{}
+	ast.Inspect(parseMain(t), func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		recv, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		key := recv.Name + "." + sel.Sel.Name
+		if _, seen := pos[key]; !seen {
+			pos[key] = call.Pos()
+		}
+		return true
+	})
+	for _, k := range []string{"srv.Shutdown", "eng.Stop", "dispatcher.Stop"} {
+		if pos[k] == token.NoPos {
+			t.Fatalf("no %s call in main.go; this test needs updating", k)
+		}
+	}
+	if pos["srv.Shutdown"] > pos["dispatcher.Stop"] {
+		t.Error("dispatcher.Stop runs before srv.Shutdown: push heartbeats received during the HTTP drain lose their alerts")
+	}
+	if pos["srv.Shutdown"] > pos["eng.Stop"] {
+		t.Error("eng.Stop runs before srv.Shutdown: a push monitor's transition during the drain reaches a stopped engine")
+	}
+	if pos["eng.Stop"] > pos["dispatcher.Stop"] {
+		t.Error("dispatcher.Stop runs before eng.Stop: the engine's last transitions have nobody to deliver them")
+	}
+}
+
 // Detection off must stay entirely inert, which is what the engine's nil guard
 // relies on.
 func TestNoAnomalyDetectorWhenDisabled(t *testing.T) {
