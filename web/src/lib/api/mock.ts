@@ -529,6 +529,14 @@ function startTicker() {
 	}, 3000);
 }
 
+// plain copies caller input before the mock stores it. The monitor form passes
+// Svelte $state arrays, which are proxies; stored as given, they made the next
+// structuredClone-based read throw a DataCloneError. The real client never
+// meets this, because it serialises the input to JSON.
+function plain<T>(v: T): T {
+	return JSON.parse(JSON.stringify(v)) as T;
+}
+
 // ---- history generation ---------------------------------------------------
 
 function genHeartbeats(m: Monitor, rangeSec: number, points: number): Heartbeat[] {
@@ -1265,7 +1273,7 @@ export const mockApi = {
 		);
 		// `url` is server-derived (monitorToWire never sends it), so it is
 		// re-resolved from config rather than taken from the input.
-		Object.assign(m, input, {
+		Object.assign(m, plain(input), {
 			id: m.id,
 			status: 'pending' as MonitorStatus,
 			url: targetUrl(config)
@@ -1277,7 +1285,7 @@ export const mockApi = {
 		await delay(180);
 		const m = find(mid);
 		assertNoParentCycle(mid, input.parentId);
-		Object.assign(m, input, { id: m.id });
+		Object.assign(m, plain(input), { id: m.id });
 		m.url = targetUrl(m.config);
 		return clone(m);
 	},
