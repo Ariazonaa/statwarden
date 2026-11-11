@@ -109,6 +109,52 @@ func TestSendBasicAuth(t *testing.T) {
 	}
 }
 
+// The topic is the path, and on a public server knowing it is all it takes to
+// read and publish — so it must not appear in the provider's errors.
+func TestErrorsDoNotRepeatTheTopic(t *testing.T) {
+	const topic = "s3cr3t-topic-name"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	for _, server := range []string{srv.URL, "http://127.0.0.1:1"} {
+		cfg := json.RawMessage(`{"server_url":"` + server + `","topic":"` + topic + `"}`)
+		err := New().Send(t.Context(), cfg, domain.NotificationEvent{Kind: domain.EventKindTest})
+		if err == nil {
+			t.Fatalf("Send via %s succeeded", server)
+		}
+		if strings.Contains(err.Error(), topic) {
+			t.Errorf("error repeats the topic: %v", err)
+		}
+	}
+}
+
+// A monitor name is free text, and the title travels as an HTTP header. A
+// newline or other control character in it made net/http refuse to build the
+// request, so every alert for that monitor failed — retried, and failed again.
+func TestControlCharactersInTheTitleDoNotBreakDelivery(t *testing.T) {
+	var gotTitle, gotTags string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTitle = r.Header.Get("X-Title")
+		gotTags = r.Header.Get("X-Tags")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := json.RawMessage(`{"server_url":"` + srv.URL + `","topic":"a","tags":["ops\nteam"]}`)
+	ev := domain.NotificationEvent{Kind: domain.EventKindDown, Title: "API\r\nprod\x00 is DOWN"}
+	if err := New().Send(t.Context(), cfg, ev); err != nil {
+		t.Fatalf("Send error = %v", err)
+	}
+	if gotTitle != "API prod is DOWN" {
+		t.Errorf("X-Title = %q, want the control characters replaced", gotTitle)
+	}
+	if strings.ContainsAny(gotTags, "\r\n") || !strings.Contains(gotTags, "ops team") {
+		t.Errorf("X-Tags = %q", gotTags)
+	}
+}
+
 func TestSendNon2xx(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
