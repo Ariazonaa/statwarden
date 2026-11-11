@@ -171,3 +171,77 @@ func TestResetConfirmChecksTheTokenBeforeHashing(t *testing.T) {
 		t.Fatalf("hashed %d times for one redemption, want 1", calls)
 	}
 }
+
+// The re-authentication checks behind a session — step-up, password change,
+// address change, TOTP enrolment — had no attempt limit at all. A borrowed
+// session could therefore guess the password (or a six-digit code) at request
+// speed, which the login form's lockout exists to prevent. They now share one
+// failure budget per account, and once it is spent even the right answer waits
+// out the cool-off.
+func TestReauthenticationChecksAreAttemptLimited(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		method, path string
+		wrong, right any
+	}{
+		{
+			name: "step-up", method: http.MethodPost, path: "/api/v1/me/api-keys",
+			wrong: createAPIKeyRequest{Name: "k", stepUp: stepUp{Password: "guess"}},
+			right: createAPIKeyRequest{Name: "k", stepUp: stepUp{Password: "supersecret"}},
+		},
+		{
+			name: "password change", method: http.MethodPut, path: "/api/v1/me/password",
+			wrong: changePasswordRequest{CurrentPassword: "guess", NewPassword: "another-password"},
+			right: changePasswordRequest{CurrentPassword: "supersecret", NewPassword: "another-password"},
+		},
+		{
+			name: "address change", method: http.MethodPut, path: "/api/v1/me/email",
+			wrong: changeEmailRequest{CurrentPassword: "guess", Email: "moved@example.com"},
+			right: changeEmailRequest{CurrentPassword: "supersecret", Email: "moved@example.com"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			admin := h.setupAdmin()
+			for i := 1; i <= lockoutThreshold; i++ {
+				if rec := h.requestWith(tc.method, tc.path, tc.wrong, admin); rec.Code != http.StatusForbidden {
+					t.Fatalf("wrong attempt %d = %d, want 403; body %s", i, rec.Code, rec.Body.String())
+				}
+			}
+			rec := h.requestWith(tc.method, tc.path, tc.right, admin)
+			if rec.Code != http.StatusTooManyRequests {
+				t.Fatalf("right answer after %d failures = %d, want 429; body %s",
+					lockoutThreshold, rec.Code, rec.Body.String())
+			}
+		})
+	}
+
+	t.Run("TOTP enrolment code", func(t *testing.T) {
+		h := newHarness(t)
+		admin := h.setupAdmin()
+		rec := h.requestWith(http.MethodPost, "/api/v1/me/totp/enroll", stepUp{Password: "supersecret"}, admin)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("enroll = %d, body %s", rec.Code, rec.Body.String())
+		}
+		var enroll map[string]string
+		mustJSON(t, rec, &enroll)
+		code, err := auth.TOTPCode(enroll["secret"], time.Now())
+		if err != nil {
+			t.Fatalf("TOTPCode: %v", err)
+		}
+		wrong := "000000"
+		if code == wrong {
+			wrong = "111111"
+		}
+		for i := 1; i <= lockoutThreshold; i++ {
+			rec := h.requestWith(http.MethodPost, "/api/v1/me/totp/verify", totpVerifyRequest{Code: wrong}, admin)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("wrong code %d = %d, want 400", i, rec.Code)
+			}
+		}
+		rec = h.requestWith(http.MethodPost, "/api/v1/me/totp/verify", totpVerifyRequest{Code: code}, admin)
+		if rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("right code after %d failures = %d, want 429", lockoutThreshold, rec.Code)
+		}
+	})
+}
