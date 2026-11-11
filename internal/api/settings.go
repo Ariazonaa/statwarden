@@ -91,10 +91,17 @@ const (
 	maxWebhookSecretLen = 256
 )
 
+// SettingMetricsToken is the bearer token /metrics requires. Exported because
+// cmd/statwarden reads it, per request through a short cache, to gate the
+// endpoint. It is a credential like the signing secrets above and is handled
+// the same way: sealed on write, reported only as set or not.
+const SettingMetricsToken = "metrics_token"
+
 // isSecretSetting reports whether a key holds a secret that must never be read
 // back through the API.
 func isSecretSetting(key string) bool {
-	return key == SettingAuditWebhookSecret || key == SettingOutboundWebhookSecret
+	return key == SettingAuditWebhookSecret || key == SettingOutboundWebhookSecret ||
+		key == SettingMetricsToken
 }
 
 // maskSecretSetting replaces a secret row's value with whether it is set. The

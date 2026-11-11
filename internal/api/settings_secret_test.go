@@ -107,6 +107,37 @@ func TestNullWebhookSecretIsRejected(t *testing.T) {
 	}
 }
 
+// The /metrics scrape token is a credential like the signing secrets: it was
+// stored in plaintext and handed back by GET /settings to every admin session.
+func TestMetricsTokenIsSealedAndNeverReadBack(t *testing.T) {
+	box, err := secrets.New("test-key-for-webhook-secrets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHarnessWithBox(t, box)
+	admin := h.setupAdmin()
+	const token = "scrape-0123456789abcdef"
+
+	rec := h.requestWith(http.MethodPut, "/api/v1/settings/"+SettingMetricsToken, token, admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set = %d, body %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), token) {
+		t.Fatalf("the write response echoes the token: %s", rec.Body.String())
+	}
+	rec = h.requestWith(http.MethodGet, "/api/v1/settings", nil, admin)
+	if strings.Contains(rec.Body.String(), token) {
+		t.Fatalf("the settings list leaks the metrics token: %s", rec.Body.String())
+	}
+	st, err := h.store.GetSetting(context.Background(), SettingMetricsToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(st.Value), token) {
+		t.Fatalf("the metrics token is stored in plaintext: %s", st.Value)
+	}
+}
+
 func TestSavingAWeakWebhookSecretIsRejected(t *testing.T) {
 	h := newHarness(t)
 	admin := h.setupAdmin()

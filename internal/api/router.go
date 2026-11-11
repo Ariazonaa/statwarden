@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"net/netip"
@@ -114,11 +115,12 @@ type Options struct {
 	AuditSink AuditSink
 	// Metrics is the Prometheus /metrics handler; nil disables the endpoint.
 	Metrics http.Handler
-	// MetricsToken is the scrape token configured for /metrics. When empty the
-	// endpoint is closed by default (a 404) even if Metrics is non-nil, so an
-	// operator who never set a token does not silently expose the metrics — the
-	// leak the previous "empty token means open" behaviour created.
-	MetricsToken string
+	// MetricsToken returns the scrape token configured for /metrics, consulted
+	// on every request so a rotation takes effect without a restart. When it is
+	// nil or returns "" the endpoint is closed (a 404) even if Metrics is
+	// non-nil, so an operator who never set a token does not silently expose the
+	// metrics — the leak the previous "empty token means open" behaviour created.
+	MetricsToken func(context.Context) string
 	// Logos stores and serves uploaded status-page logos. When nil the upload
 	// endpoints report 503 and the /uploads/logos route is not mounted.
 	Logos *LogoStore
@@ -178,7 +180,7 @@ type server struct {
 	push           PushRecorder
 	auditSink      AuditSink
 	metrics        http.Handler
-	metricsToken   string
+	metricsToken   func(context.Context) string
 	logos          *LogoStore
 	avatars        *LogoStore
 	mailer         Mailer
@@ -313,14 +315,16 @@ func newWithServer(o Options) (http.Handler, *server) {
 	// token the endpoint answers 404 rather than serving metrics to anyone, so a
 	// deployment that never set a token does not leak its internals. With a token
 	// the wired handler serves and enforces the token itself.
+	// Decided per request rather than at startup, so setting, rotating or
+	// removing the token in Settings opens or closes the endpoint live.
 	if s.metrics != nil {
-		if s.metricsToken == "" {
-			r.Handle("/metrics", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		r.Handle("/metrics", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if s.metricsToken == nil || s.metricsToken(req.Context()) == "" {
 				writeProblem(w, http.StatusNotFound, "Not Found")
-			}))
-		} else {
-			r.Handle("/metrics", s.metrics)
-		}
+				return
+			}
+			s.metrics.ServeHTTP(w, req)
+		}))
 	}
 
 	r.Route("/api", func(api chi.Router) {

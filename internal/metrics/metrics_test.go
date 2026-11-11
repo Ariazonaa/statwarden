@@ -91,6 +91,29 @@ func TestHandlerTokenGate(t *testing.T) {
 	}
 }
 
+// TestHandlerFuncReadsTheTokenPerRequest pins rotation. The token used to be
+// read once at startup, so rotating it in Settings left the OLD one working —
+// the one you rotate because it leaked — until the next restart.
+func TestHandlerFuncReadsTheTokenPerRequest(t *testing.T) {
+	token := "first"
+	h := HandlerFunc(sampleSource(), func(context.Context) string { return token })
+	withBearer := func(v string) *http.Request {
+		req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		req.Header.Set("Authorization", "Bearer "+v)
+		return req
+	}
+	if code, _ := scrape(t, h, withBearer("first")); code != http.StatusOK {
+		t.Fatalf("current token = %d, want 200", code)
+	}
+	token = "second"
+	if code, _ := scrape(t, h, withBearer("first")); code != http.StatusUnauthorized {
+		t.Fatalf("rotated-out token = %d, want 401", code)
+	}
+	if code, _ := scrape(t, h, withBearer("second")); code != http.StatusOK {
+		t.Fatalf("new token = %d, want 200", code)
+	}
+}
+
 // TestHandlerQueryTokenIsDeprecatedButStillWorks pins the backwards-compatible
 // half of moving the scrape secret out of the URL.
 //

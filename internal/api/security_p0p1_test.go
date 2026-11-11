@@ -142,10 +142,20 @@ func TestMetricsClosedWithoutToken(t *testing.T) {
 	})
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
+	// The token is read per request, so one server covers all three states:
+	// unset, set, and unset again — rotation and removal take effect without a
+	// restart, which they did not while it was read once at startup.
+	token := ""
+	srv := New(Options{Logger: log, Store: NewMemStore(), Metrics: metrics,
+		MetricsToken: func(context.Context) string { return token }})
+	get := func() *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		return rec
+	}
+
 	// No token: closed (404), and the metric body must not leak.
-	closed := New(Options{Logger: log, Store: NewMemStore(), Metrics: metrics, MetricsToken: ""})
-	rec := httptest.NewRecorder()
-	closed.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	rec := get()
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("/metrics with empty token = %d, want 404", rec.Code)
 	}
@@ -154,11 +164,23 @@ func TestMetricsClosedWithoutToken(t *testing.T) {
 	}
 
 	// With a token, the wired handler serves (it enforces the token itself).
-	open := New(Options{Logger: log, Store: NewMemStore(), Metrics: metrics, MetricsToken: "s3cret"})
-	rec = httptest.NewRecorder()
-	open.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if rec.Code != http.StatusOK || rec.Body.String() != body {
+	token = "s3cret"
+	if rec = get(); rec.Code != http.StatusOK || rec.Body.String() != body {
 		t.Fatalf("/metrics with token = %d body %q, want 200 %q", rec.Code, rec.Body.String(), body)
+	}
+
+	// Removing the token closes the endpoint again, live.
+	token = ""
+	if rec = get(); rec.Code != http.StatusNotFound {
+		t.Fatalf("/metrics after the token was removed = %d, want 404", rec.Code)
+	}
+
+	// No token source at all is the closed state too.
+	none := New(Options{Logger: log, Store: NewMemStore(), Metrics: metrics})
+	rec = httptest.NewRecorder()
+	none.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("/metrics without a token source = %d, want 404", rec.Code)
 	}
 }
 
