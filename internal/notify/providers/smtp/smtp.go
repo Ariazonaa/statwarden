@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Ariazonaa/statwarden/internal/domain"
+	"github.com/Ariazonaa/statwarden/internal/netguard"
 	"github.com/Ariazonaa/statwarden/internal/notify/registry"
 )
 
@@ -161,7 +162,9 @@ func (n *Notifier) buildMessage(c Config, event domain.NotificationEvent) []byte
 // where possible, the whole exchange.
 func smtpSend(ctx context.Context, c Config, msg []byte) error {
 	addr := net.JoinHostPort(c.Host, strconv.Itoa(c.effectivePort()))
-	dialer := net.Dialer{Timeout: dialTimeout}
+	// The relay is chosen by whoever configures the channel, so it dials
+	// through the egress guard like every other operator-chosen target.
+	dialer := netguard.Dialer(&net.Dialer{Timeout: dialTimeout})
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)

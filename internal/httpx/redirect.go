@@ -8,10 +8,13 @@ package httpx
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/Ariazonaa/statwarden/internal/netguard"
 )
 
 // SensitiveHeaders is net/http's own strip-on-redirect set.
@@ -147,9 +150,16 @@ const DefaultMaxRedirects = 5
 // because net/http replays method and body verbatim and there is no header to
 // remove. Providers that put a token in the body are bounded by
 // DefaultMaxRedirects and by the endpoint being one the operator chose.
+//
+// The transport dials through the optional egress guard, like the monitor
+// checks: a channel URL is configured by the same people and reaches the same
+// network.
 func NotifierClient(timeout time.Duration, extra ...string) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = netguard.Dialer(&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
 	return &http.Client{
 		Timeout:       timeout,
+		Transport:     transport,
 		CheckRedirect: StripCredentialsOnRedirect(DefaultMaxRedirects, extra),
 	}
 }

@@ -62,10 +62,11 @@ type Notifier struct {
 // rather than a hang.
 const maxRedirects = 5
 
-// New builds a webhook Notifier with a default HTTP client. The dispatcher
-// bounds each Send with its own context timeout.
+// New builds a webhook Notifier on the shared notifier client, whose transport
+// dials through the optional egress guard. The dispatcher bounds each Send
+// with its own context timeout, so the client sets none.
 func New() *Notifier {
-	return &Notifier{client: &http.Client{}}
+	return &Notifier{client: httpx.NotifierClient(0)}
 }
 
 // Type implements registry.Notifier.

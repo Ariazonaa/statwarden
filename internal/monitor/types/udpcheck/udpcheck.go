@@ -19,6 +19,7 @@ import (
 
 	"github.com/Ariazonaa/statwarden/internal/domain"
 	"github.com/Ariazonaa/statwarden/internal/monitor/registry"
+	"github.com/Ariazonaa/statwarden/internal/netguard"
 )
 
 // TypeName is the registry name stored in monitors.type.
@@ -121,7 +122,7 @@ func (*Checker) Check(ctx context.Context, cfg json.RawMessage) (domain.CheckRes
 // or the context deadline, whichever comes first — for the socket to say
 // something back.
 func probe(ctx context.Context, addr string, payload []byte, wait time.Duration) probeResult {
-	var d net.Dialer
+	d := netguard.Dialer(&net.Dialer{})
 	conn, err := d.DialContext(ctx, "udp", addr)
 	if err != nil {
 		return probeResult{outcome: outcomeRejected, err: err}
