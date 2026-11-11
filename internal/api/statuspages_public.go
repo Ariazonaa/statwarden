@@ -546,7 +546,11 @@ func (s *server) buildPublicPageView(ctx context.Context, page StatusPage, range
 	// that struct is published by default — which is the wrong default for an
 	// unpublished post-mortem draft. Stripping happens here and in
 	// announceIncident, the only two places an incident reaches the public.
-	incidents, err := s.store.ListIncidents(ctx, page.ID)
+	//
+	// Only the public subset is read. The loop below still applies the same
+	// selection, so it stays correct against any store, but the store no longer
+	// hands over a page's whole incident history on every anonymous view.
+	incidents, err := s.store.ListPublicIncidents(ctx, page.ID, recentIncidentCount, maxPublicIncidents)
 	if err != nil {
 		// Discarding this meant a page whose incident table was unreadable
 		// announced that there were no incidents.

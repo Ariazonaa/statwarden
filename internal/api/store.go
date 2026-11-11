@@ -458,6 +458,13 @@ type statusPageStore interface {
 	// Incidents.
 	CreateIncident(ctx context.Context, in Incident) (Incident, error)
 	ListIncidents(ctx context.Context, pageID int64) ([]Incident, error)
+	// ListPublicIncidents is the subset of ListIncidents the public page shows,
+	// in the same order: every unresolved incident, plus resolved ones — the
+	// `recent` first in order, then only those with a published post-mortem,
+	// `limit` resolved in all. It exists so an anonymous page view or badge
+	// does not read a page's entire incident history to render at most
+	// `limit` of it.
+	ListPublicIncidents(ctx context.Context, pageID int64, recent, limit int) ([]Incident, error)
 	GetIncident(ctx context.Context, id int64) (Incident, error)
 	// UpdateIncident is full-replace over the incident's editable fields. It
 	// deliberately does NOT touch postmortem/postmortem_published_at: those are

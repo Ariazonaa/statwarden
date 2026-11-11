@@ -42,6 +42,14 @@ func (f *failingStore) ListIncidents(ctx context.Context, pageID int64) ([]Incid
 	return f.MemStore.ListIncidents(ctx, pageID)
 }
 
+// ListPublicIncidents is the read the public page actually makes.
+func (f *failingStore) ListPublicIncidents(ctx context.Context, pageID int64, recent, limit int) ([]Incident, error) {
+	if f.failIncident.Load() {
+		return nil, errStoreDown
+	}
+	return f.MemStore.ListPublicIncidents(ctx, pageID, recent, limit)
+}
+
 func (f *failingStore) ListMaintenance(ctx context.Context) ([]MaintenanceWindow, error) {
 	if f.failMaint.Load() {
 		return nil, errStoreDown
