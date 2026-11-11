@@ -59,6 +59,13 @@ type Store interface {
 	// that could reach a live monitor would be the single most destructive
 	// statement in the product.
 	PruneBin(ctx context.Context, olderThanDays int) ([]PrunedMonitor, error)
+	// PruneExpired deletes credentials that can no longer be used — expired
+	// sessions, password-reset tokens and WebAuthn challenges — and returns how
+	// many rows it removed. Expiry is judged on the database clock, for the
+	// reason PruneBin gives. Implementations keep a short grace period past
+	// expiry, so a token a user is presenting right now is answered by the auth
+	// code ("expired") rather than vanishing under it.
+	PruneExpired(ctx context.Context) (int64, error)
 }
 
 // PrunedMonitor is one monitor the bin sweep destroyed.
@@ -162,17 +169,11 @@ func New(o Options) *Pruner {
 // exits cleanly when ctx is cancelled — matching the app's graceful-shutdown
 // model.
 func (p *Pruner) Start(ctx context.Context) {
-	// A runtime source can raise the window above zero even when the static
-	// default is off, so the loop must start whenever either can enable pruning.
-	//
-	// The delivery and recycle-bin windows count too: each is an independent
-	// policy on its own timer-less schedule, and gating the whole loop on the
-	// heartbeat window alone meant an operator who disabled that one silently
-	// disabled the other two as well.
-	if p.retentionDays <= 0 && p.daysFunc == nil && p.deliveryDays <= 0 && p.trashDays <= 0 {
-		p.log.Info("every retention window is disabled; pruning loop not started")
-		return
-	}
+	// Always started, even with every retention window disabled: the expired-
+	// credential pass has no window to switch off. Those windows guard history
+	// an operator may want to keep; an expired session is not history, and it
+	// was the gating on the windows alone that once let one disabled policy
+	// silently disable the others. Each pass checks its own window.
 	safego.Go(p.log, "retention job", func() { p.loop(ctx) })
 }
 
@@ -222,6 +223,26 @@ func (p *Pruner) runOnce(ctx context.Context) {
 	_ = safego.Do(p.log, "heartbeat prune", func() { p.pruneHeartbeats(ctx) })
 	_ = safego.Do(p.log, "delivery log prune", func() { p.pruneDeliveries(ctx) })
 	_ = safego.Do(p.log, "recycle bin prune", func() { p.pruneBin(ctx) })
+	_ = safego.Do(p.log, "expired credential prune", func() { p.pruneExpired(ctx) })
+}
+
+// pruneExpired deletes sessions, password-reset tokens and WebAuthn challenges
+// past their expiry. Nothing did before: each login left a session row behind
+// for good, so the table grew with the age of the instance and every one of
+// those rows went into each backup.
+func (p *Pruner) pruneExpired(ctx context.Context) {
+	start := time.Now()
+	deleted, err := p.store.PruneExpired(ctx)
+	dur := time.Since(start)
+	if err != nil {
+		p.log.Error("expired credential prune failed", "error", err, "duration_ms", dur.Milliseconds())
+		return
+	}
+	lvl := slog.LevelDebug
+	if deleted > 0 {
+		lvl = slog.LevelInfo
+	}
+	p.log.Log(ctx, lvl, "expired credential prune complete", "deleted", deleted, "duration_ms", dur.Milliseconds())
 }
 
 // pruneHeartbeats trims the heartbeat table and reports the pass to metrics.

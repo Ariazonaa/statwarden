@@ -112,6 +112,64 @@ func TestPruneBeforeDeletesInBatches(t *testing.T) {
 	}
 }
 
+// TestPruneExpiredKeepsLiveCredentials checks both sides of every grace
+// period: what is long expired goes, what is live or only just expired stays.
+func TestPruneExpiredKeepsLiveCredentials(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	var userID int64
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, username, password_hash) VALUES ('reaper@example.test', 'reaper', 'x') RETURNING id`).Scan(&userID); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	// One placeholder per statement: $1 is the user id.
+	for _, stmt := range []string{
+		`INSERT INTO sessions (id, user_id, expires_at) VALUES
+		    ('s-live',   $1, now() + interval '1 day'),
+		    ('s-recent', $1, now() - interval '1 hour'),
+		    ('s-old',    $1, now() - interval '3 days')`,
+		`INSERT INTO webauthn_challenges (id, user_id, kind, data, expires_at) VALUES
+		    ('c-live', $1, 'login', '{}', now() + interval '5 minutes'),
+		    ('c-old',  $1, 'login', '{}', now() - interval '2 days')`,
+		`INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES
+		    ($1, 'r-recent', now() - interval '2 days'),
+		    ($1, 'r-old',    now() - interval '30 days')`,
+	} {
+		if _, err := pool.Exec(ctx, stmt, userID); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	deleted, err := NewPgStore(pool).PruneExpired(ctx)
+	if err != nil {
+		t.Fatalf("PruneExpired: %v", err)
+	}
+	if deleted != 3 {
+		t.Fatalf("deleted = %d, want 3 (s-old, c-old, r-old)", deleted)
+	}
+	var left []string
+	rows, err := pool.Query(ctx, `
+		SELECT id FROM sessions
+		UNION ALL SELECT id FROM webauthn_challenges
+		UNION ALL SELECT token_hash FROM password_resets
+		ORDER BY 1`)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		left = append(left, id)
+	}
+	want := []string{"c-live", "r-recent", "s-live", "s-recent"}
+	if fmt.Sprint(left) != fmt.Sprint(want) {
+		t.Fatalf("left %v, want %v", left, want)
+	}
+}
+
 // TestRetentionIndexExists pins that migration 0021 left the index the batched
 // delete depends on.
 func TestRetentionIndexExists(t *testing.T) {
