@@ -16,7 +16,7 @@
 	import { page } from '$app/state';
 	import { api, problemStatus } from '$lib/api';
 	import type { PublicHistory } from '$lib/api/types';
-	import { t, i18n, type Locale } from '$lib/i18n';
+	import { t, i18n, formatUptime, type Locale } from '$lib/i18n';
 	import { GlassCard, PillButton, SegmentedControl, Skeleton, TextField } from '$lib/design-system';
 
 	const slug = $derived(page.params.slug ?? '');
@@ -160,14 +160,12 @@
 	/**
 	 * A 0..1 fraction as a percentage, or a dash when the month has no data.
 	 *
-	 * TRUNCATED, not rounded. `toFixed` renders 99.999% as "100.00%", and a
-	 * historical availability record that reports a month with downtime in it as a
-	 * perfect month is the one number this page must not produce. Truncation can
-	 * only understate, so 100.00% here means exactly what it says.
+	 * TRUNCATED, not rounded, by the formatter every uptime figure shares: a
+	 * historical availability record that reports a month with downtime in it as
+	 * a perfect month is the one number this page must not produce.
 	 */
 	function pct(v: number): string {
-		if (v < 0) return '—';
-		return `${(Math.floor(v * 10000) / 100).toFixed(2)}%`;
+		return v < 0 ? '—' : formatUptime(v * 100);
 	}
 
 	function tone(v: number): 'none' | 'up' | 'degraded' | 'down' {

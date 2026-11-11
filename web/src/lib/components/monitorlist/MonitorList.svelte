@@ -24,7 +24,7 @@
 	import { monitorList, type ListSort } from '$lib/stores/monitorList.svelte';
 	import { prefs } from '$lib/stores/prefs.svelte';
 	import { session } from '$lib/stores/session.svelte';
-	import { t, formatNumber } from '$lib/i18n';
+	import { t, formatUptime } from '$lib/i18n';
 	import {
 		Checkbox,
 		EmptyState,
@@ -166,9 +166,7 @@
 
 	function folderUptime(items: Monitor[]): string {
 		const u = meanUptime(items);
-		return u === undefined
-			? '–'
-			: `${formatNumber(u, { maximumFractionDigits: u === 100 ? 0 : 2 })} %`;
+		return formatUptime(u, '–');
 	}
 
 	// ---- bulk selection ----

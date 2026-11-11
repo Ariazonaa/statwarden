@@ -6,7 +6,7 @@
 	// it and take their own clicks.
 	import { page } from '$app/state';
 	import { prefs } from '$lib/stores/prefs.svelte';
-	import { t, formatNumber } from '$lib/i18n';
+	import { t, formatUptime } from '$lib/i18n';
 	import { Checkbox, HeartbeatBar, StatusPill } from '$lib/design-system';
 	import type { Monitor, Tag } from '$lib/api';
 
@@ -32,11 +32,7 @@
 	const monitorTags = $derived(tags.filter((tg) => monitor.tagIds.includes(tg.id)));
 	const current = $derived(page.params.id === monitor.id);
 	const compact = $derived(prefs.density === 'compact');
-	const uptime = $derived(
-		monitor.uptime24h === undefined
-			? '–'
-			: `${formatNumber(monitor.uptime24h, { maximumFractionDigits: monitor.uptime24h === 100 ? 0 : 2 })} %`
-	);
+	const uptime = $derived(formatUptime(monitor.uptime24h, '–'));
 
 	function toggleFav(e: MouseEvent) {
 		e.preventDefault();

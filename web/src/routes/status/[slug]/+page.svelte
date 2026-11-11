@@ -20,7 +20,7 @@
 	import type { IncidentStatus, IncidentSeverity } from '$lib/api/types';
 	import Postmortem from '$lib/components/statuspage/Postmortem.svelte';
 	import { ws } from '$lib/ws/store.svelte';
-	import { t, i18n, type Locale, type MessageKey } from '$lib/i18n';
+	import { t, i18n, formatUptime, type Locale, type MessageKey } from '$lib/i18n';
 	import { absoluteTime, relativeTime } from '$lib/util/time';
 	import {
 		GlassCard,
@@ -317,7 +317,7 @@
 			statusLabel: labelFor(d.status),
 			// No percentage for a bucket with nothing in it: the status label
 			// already says so, and repeating it read "no data · no data".
-			detail: d.uptime >= 0 ? `${(d.uptime * 100).toFixed(2)}%` : undefined
+			detail: d.uptime >= 0 ? formatUptime(d.uptime * 100) : undefined
 		}));
 	}
 
@@ -327,7 +327,7 @@
 	}
 
 	function uptimePct(m: PublicMonitorView): string {
-		return m.uptime >= 0 ? `${(m.uptime * 100).toFixed(2)}%` : '—';
+		return m.uptime >= 0 ? formatUptime(m.uptime * 100) : '—';
 	}
 
 	/**

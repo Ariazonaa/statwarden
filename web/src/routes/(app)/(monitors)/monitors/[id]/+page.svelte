@@ -20,7 +20,7 @@
 	import RelativeTime from '$lib/components/RelativeTime.svelte';
 	import { humanDuration } from '$lib/util/time';
 	import { renderMarkdown } from '$lib/util/markdown';
-	import { t, formatDateTime, formatNumber } from '$lib/i18n';
+	import { t, formatDateTime, formatUptime } from '$lib/i18n';
 	import {
 		EmptyState,
 		GlassCard,
@@ -119,9 +119,7 @@
 
 	/** Uptime as a percentage, or a dash for "no conclusive check in the window" — never 0. */
 	function pct(v: number | undefined): string {
-		return v === undefined
-			? '—'
-			: `${formatNumber(v, { maximumFractionDigits: v === 100 ? 0 : 2 })} %`;
+		return formatUptime(v);
 	}
 	const fullDate = (at: string) =>
 		formatDateTime(at, {

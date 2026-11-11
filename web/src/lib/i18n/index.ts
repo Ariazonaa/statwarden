@@ -11,5 +11,5 @@ export {
 	type Locale,
 	type LocaleMeta
 } from './store.svelte';
-export { formatDateTime, formatNumber } from './format';
+export { formatDateTime, formatNumber, formatUptime } from './format';
 export type { MessageKey, Messages } from './locales/en';
