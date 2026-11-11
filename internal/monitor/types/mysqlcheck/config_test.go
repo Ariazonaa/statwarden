@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/go-sql-driver/mysql"
 )
 
 func TestValidate(t *testing.T) {
@@ -69,5 +72,19 @@ func TestDSN(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// database/sql's Tx.Rollback takes no context, so after the assertion query the
+// ROLLBACK was bounded by nothing: a server that stopped answering held the
+// check — and the monitor, which is not rescheduled until it returns — forever.
+// I/O timeouts on the connection are what bound it.
+func TestDSNBoundsEveryRead(t *testing.T) {
+	mc, err := mysql.ParseDSN(Config{Host: "db.example.test", ConnectTimeoutSeconds: 3}.dsn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mc.ReadTimeout != 3*time.Second || mc.WriteTimeout != 3*time.Second {
+		t.Fatalf("read/write timeout = %s/%s, want the 3s connect timeout", mc.ReadTimeout, mc.WriteTimeout)
 	}
 }

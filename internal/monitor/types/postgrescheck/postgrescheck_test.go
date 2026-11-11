@@ -6,6 +6,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgproto3"
 
 	"github.com/Ariazonaa/statwarden/internal/domain"
 	"github.com/Ariazonaa/statwarden/internal/monitor/registry"
@@ -143,5 +146,30 @@ func TestAFailedAssertionDoesNotEchoTheObservedValue(t *testing.T) {
 	}
 	if !strings.Contains(msg, "1") {
 		t.Errorf("the message dropped the operator's own expectation: %q", msg)
+	}
+}
+
+// The rollback after the assertion query, and the close, ran on
+// context.Background(): a server that stopped answering at that point held the
+// check forever, and the engine never schedules a monitor whose check has not
+// returned.
+func TestCleanupAfterTheQueryIsBounded(t *testing.T) {
+	old := cleanupTimeout
+	cleanupTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { cleanupTimeout = old })
+
+	srv := startFakeServer(t, &pgproto3.ErrorResponse{Severity: "ERROR", Code: "42601", Message: "syntax error"})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = livePostgres(context.Background(), Config{
+			Host: srv.host, Port: srv.port, User: "monitor", Database: "app",
+			SSLMode: SSLModeDisable, Query: "SELEC 1",
+		})
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("livePostgres still waiting for a ROLLBACK the server never answers")
 	}
 }
