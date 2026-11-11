@@ -45,7 +45,7 @@ func TestValidTopicSlugShape(t *testing.T) {
 // hub.subscribe touches neither the connection nor the send channel, so a bare
 // value exercises the real path without a socket.
 func newTestClient(h *Hub, authenticated bool) *client {
-	c := &client{hub: h, subs: map[string]struct{}{}}
+	c := &client{hub: h, subs: map[string]struct{}{}, canSeePage: allowAllPages}
 	c.authenticated.Store(authenticated)
 	return c
 }

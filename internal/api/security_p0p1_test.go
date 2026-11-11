@@ -166,10 +166,16 @@ func TestMetricsClosedWithoutToken(t *testing.T) {
 
 // recordingWSHub records whether the upgrade was reached, standing in for the
 // real hub so the origin gate can be exercised without a real socket upgrade.
-type recordingWSHub struct{ served bool }
+type recordingWSHub struct {
+	served     bool
+	peer       string
+	auth       func() bool
+	canSeePage func(slug string) bool
+}
 
-func (h *recordingWSHub) ServeWS(w http.ResponseWriter, _ *http.Request, _ func() bool) {
+func (h *recordingWSHub) ServeWS(w http.ResponseWriter, _ *http.Request, peer string, auth func() bool, canSeePage func(string) bool) {
 	h.served = true
+	h.peer, h.auth, h.canSeePage = peer, auth, canSeePage
 	w.WriteHeader(http.StatusSwitchingProtocols)
 }
 

@@ -101,6 +101,12 @@ type client struct {
 	authenticated atomic.Bool
 	// auth re-proves the connection's session; nil for an anonymous client.
 	auth func() bool
+	// canSeePage reports whether an anonymous client may follow a status page.
+	canSeePage func(slug string) bool
+	// peer is the client address; anonSlot is set when the connection holds
+	// one of the hub's anonymous slots, which unregister then returns.
+	peer     string
+	anonSlot bool
 
 	subs      map[string]struct{}
 	done      chan struct{}
@@ -117,19 +123,37 @@ type client struct {
 // socket reading private monitor and dashboard events until the browser
 // happened to disconnect. It is re-checked every authRecheckPeriod for as long
 // as the connection lives.
-func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request, auth func() bool) {
+//
+// peer is the client address as the caller resolved it (behind a trusted proxy
+// that is not RemoteAddr), and keys the anonymous connection cap. canSeePage
+// answers whether an anonymous client may follow a given status page; it is
+// called on every anonymous status-page subscribe, and nil refuses them all.
+func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request, peer string, auth func() bool, canSeePage func(slug string) bool) {
+	anon := auth == nil
+	// The cap is enforced before the upgrade, so a refused client gets an
+	// ordinary HTTP answer and costs no goroutine at all.
+	if anon && !h.reserveAnon(peer) {
+		http.Error(w, "too many connections", http.StatusTooManyRequests)
+		return
+	}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
+		if anon {
+			h.releaseAnon(peer)
+		}
 		h.log.Debug("websocket upgrade failed", "error", err)
 		return
 	}
 	c := &client{
-		hub:  h,
-		conn: conn,
-		send: make(chan []byte, clientSendBuffer),
-		auth: auth,
-		subs: map[string]struct{}{},
-		done: make(chan struct{}),
+		hub:        h,
+		conn:       conn,
+		send:       make(chan []byte, clientSendBuffer),
+		auth:       auth,
+		canSeePage: canSeePage,
+		peer:       peer,
+		anonSlot:   anon,
+		subs:       map[string]struct{}{},
+		done:       make(chan struct{}),
 	}
 	c.authenticated.Store(auth != nil)
 	h.register(c)

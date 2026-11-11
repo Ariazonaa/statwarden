@@ -52,7 +52,8 @@ const openapiSpecPath = "openapi.json"
 // reflect a production router.
 type stubWSHub struct{}
 
-func (stubWSHub) ServeWS(http.ResponseWriter, *http.Request, func() bool) {}
+func (stubWSHub) ServeWS(http.ResponseWriter, *http.Request, string, func() bool, func(string) bool) {
+}
 
 // excludedRoutes are the (method, path) pairs deliberately left out of the
 // spec. Each entry is listed individually and justified: a prefix match would

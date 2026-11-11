@@ -20,6 +20,10 @@ func testHub() *Hub {
 	return NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
+// allowAllPages is the page check for tests that are not about it: every
+// status page is visible.
+func allowAllPages(string) bool { return true }
+
 // dialTest starts an httptest server whose handler upgrades with the given
 // authentication flag and returns a connected client.
 // dialTest opens a connection whose session, if any, stays valid forever.
@@ -37,7 +41,7 @@ func dialTest(t *testing.T, h *Hub, authenticated bool) (*websocket.Conn, *httpt
 func dialTestAuth(t *testing.T, h *Hub, auth func() bool) (*websocket.Conn, *httptest.Server) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h.ServeWS(w, r, auth)
+		h.ServeWS(w, r, r.RemoteAddr, auth, allowAllPages)
 	}))
 	url := "ws" + strings.TrimPrefix(srv.URL, "http")
 	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
