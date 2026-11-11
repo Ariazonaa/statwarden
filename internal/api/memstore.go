@@ -318,6 +318,24 @@ func (m *MemStore) SetUserTOTP(_ context.Context, id int64, secret string, enabl
 	return nil
 }
 
+// ConsumeBackupCode implements Store. The match and the write share the mutex,
+// this store's equivalent of PgStore's row lock.
+func (m *MemStore) ConsumeBackupCode(_ context.Context, userID int64, code string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.users[userID]
+	if !ok || !c.TOTPEnabled {
+		return false, nil
+	}
+	remaining, ok := auth.ConsumeBackupCode(c.BackupCodes, code)
+	if !ok {
+		return false, nil
+	}
+	c.BackupCodes = remaining
+	c.UpdatedAt = m.now()
+	return true, nil
+}
+
 // SetUserAvatar updates only the avatar path and reports the path it replaced.
 // It mirrors PgStore.SetUserAvatar and is the only writer of AvatarPath.
 func (m *MemStore) SetUserAvatar(_ context.Context, id int64, avatarPath string) (User, string, error) {

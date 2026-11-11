@@ -209,6 +209,13 @@ type userStore interface {
 	// PREVIOUS address, which is exactly the address being moved away from.
 	InvalidatePasswordResets(ctx context.Context, userID int64) error
 	SetUserTOTP(ctx context.Context, id int64, secret string, enabled bool, backupCodes []string) error
+	// ConsumeBackupCode burns one backup code of an account with 2FA enabled and
+	// reports whether it matched. The read, the match and the write of the
+	// remaining codes happen under one row lock, so a code cannot be spent twice
+	// by concurrent requests and two different codes spent at once cannot
+	// resurrect each other. It writes only backup_codes. A missing account, 2FA
+	// switched off and an unknown code are all (false, nil).
+	ConsumeBackupCode(ctx context.Context, userID int64, code string) (bool, error)
 	// SetUserAvatar replaces only avatar_path, leaving e-mail, role and every
 	// other column untouched. UpdateUser is full-replace, so the avatar endpoint
 	// would otherwise have to round-trip the whole user just to store a file

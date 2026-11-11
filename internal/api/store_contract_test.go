@@ -179,6 +179,69 @@ func runStoreContract(t *testing.T, newFixture func(t *testing.T) storeFixture) 
 		}
 	})
 
+	t.Run("a backup code is consumed once and the others stay", func(t *testing.T) {
+		f := newFixture(t)
+		u := newUser(t, f, "backup@example.com")
+		plain, hashed, err := auth.GenerateBackupCodes()
+		if err != nil {
+			t.Fatalf("GenerateBackupCodes: %v", err)
+		}
+		if err := f.Store.SetUserTOTP(ctx, u.ID, "SECRET", true, hashed); err != nil {
+			t.Fatalf("SetUserTOTP: %v", err)
+		}
+		if ok, err := f.Store.ConsumeBackupCode(ctx, u.ID, plain[0]); err != nil || !ok {
+			t.Fatalf("first use = %v, %v; want true, nil", ok, err)
+		}
+		if ok, err := f.Store.ConsumeBackupCode(ctx, u.ID, plain[0]); err != nil || ok {
+			t.Fatalf("second use = %v, %v; want false, nil", ok, err)
+		}
+		if ok, err := f.Store.ConsumeBackupCode(ctx, u.ID, "0000-0000-0000-0000-0000"); err != nil || ok {
+			t.Fatalf("unknown code = %v, %v; want false, nil", ok, err)
+		}
+		c, err := f.Store.GetCredentialsByID(ctx, u.ID)
+		if err != nil {
+			t.Fatalf("GetCredentialsByID: %v", err)
+		}
+		if !reflect.DeepEqual(c.BackupCodes, hashed[1:]) {
+			t.Fatalf("remaining codes = %v, want the other %d", c.BackupCodes, len(hashed)-1)
+		}
+		// Only the codes column moves: the secret and the enabled flag stay.
+		if c.TOTPSecret != "SECRET" || !c.TOTPEnabled {
+			t.Fatalf("consuming a code changed the TOTP state: secret %q, enabled %v", c.TOTPSecret, c.TOTPEnabled)
+		}
+		// Spending the last code leaves an empty list, not a broken one.
+		for _, p := range plain[1:] {
+			if ok, err := f.Store.ConsumeBackupCode(ctx, u.ID, p); err != nil || !ok {
+				t.Fatalf("use of %q = %v, %v; want true, nil", p, ok, err)
+			}
+		}
+		c, err = f.Store.GetCredentialsByID(ctx, u.ID)
+		if err != nil {
+			t.Fatalf("GetCredentialsByID: %v", err)
+		}
+		if len(c.BackupCodes) != 0 {
+			t.Fatalf("codes left after spending all: %v", c.BackupCodes)
+		}
+	})
+
+	t.Run("backup codes do nothing while 2FA is off", func(t *testing.T) {
+		f := newFixture(t)
+		u := newUser(t, f, "nobackup@example.com")
+		plain, hashed, err := auth.GenerateBackupCodes()
+		if err != nil {
+			t.Fatalf("GenerateBackupCodes: %v", err)
+		}
+		if err := f.Store.SetUserTOTP(ctx, u.ID, "SECRET", false, hashed); err != nil {
+			t.Fatalf("SetUserTOTP: %v", err)
+		}
+		if ok, err := f.Store.ConsumeBackupCode(ctx, u.ID, plain[0]); err != nil || ok {
+			t.Fatalf("code on a disabled account = %v, %v; want false, nil", ok, err)
+		}
+		if ok, err := f.Store.ConsumeBackupCode(ctx, u.ID+1000, plain[0]); err != nil || ok {
+			t.Fatalf("code on a missing account = %v, %v; want false, nil", ok, err)
+		}
+	})
+
 	t.Run("revoking API keys touches only that account", func(t *testing.T) {
 		f := newFixture(t)
 		mine := newUser(t, f, "mine@example.com")
