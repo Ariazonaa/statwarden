@@ -305,21 +305,71 @@ func (s *Service) Backfill(ctx context.Context, since time.Time) error {
 		since = snapped
 	}
 	for _, m := range monitors {
-		beats, err := s.store.HeartbeatsInRange(ctx, m.ID, since, now)
-		if err != nil {
-			return err
-		}
-		if len(beats) == 0 {
-			continue
-		}
-		if err := s.store.UpsertRollups(ctx, Hourly, Aggregate(m.ID, beats, Hourly)); err != nil {
-			return err
-		}
-		if err := s.store.UpsertRollups(ctx, Daily, Aggregate(m.ID, beats, Daily)); err != nil {
-			return err
+		// Read in day-aligned chunks rather than the whole window at once: 180
+		// days of 20-second checks is ~780,000 heartbeats for ONE monitor, held
+		// in memory on every start. A chunk boundary is a day boundary, so no
+		// hourly or daily bucket is ever split across two reads.
+		for from := since; from.Before(now); from = from.Add(backfillChunk) {
+			to := from.Add(backfillChunk).Add(-time.Nanosecond)
+			if to.After(now) {
+				to = now
+			}
+			beats, err := s.store.HeartbeatsInRange(ctx, m.ID, from, to)
+			if err != nil {
+				return err
+			}
+			if len(beats) == 0 {
+				continue
+			}
+			for _, b := range []Bucket{Hourly, Daily} {
+				fresh, err := s.withoutShrinkingRollups(ctx, b, m.ID, from, to, Aggregate(m.ID, beats, b))
+				if err != nil {
+					return err
+				}
+				if err := s.store.UpsertRollups(ctx, b, fresh); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
+}
+
+// backfillChunk is how much raw history Backfill reads per monitor at a time.
+// A whole number of days, so chunks stay aligned to daily buckets.
+const backfillChunk = 7 * 24 * time.Hour
+
+// withoutShrinkingRollups drops every recomputed bucket that counts FEWER beats
+// than the rollup already stored for it.
+//
+// Raw heartbeats only ever disappear from a closed bucket — retention prunes
+// them at an arbitrary instant, so the bucket at the cutoff is left holding a
+// fragment — and the rollup is exactly what is meant to outlive them. Fewer
+// beats than the stored rollup therefore means "pruned", never "corrected", and
+// overwriting it replaced a day's true count with the fragment. That happened
+// whenever the backfill window reached past what retention had kept, which is
+// the normal state once the runtime retention override in Settings is shorter
+// than HEARTBEAT_RETENTION_DAYS.
+func (s *Service) withoutShrinkingRollups(ctx context.Context, b Bucket, monitorID int64, from, to time.Time, fresh []Rollup) ([]Rollup, error) {
+	stored, err := s.store.RollupsInRange(ctx, b, monitorID, b.truncate(from), to)
+	if err != nil {
+		return nil, err
+	}
+	if len(stored) == 0 {
+		return fresh, nil
+	}
+	have := make(map[time.Time]int, len(stored))
+	for _, r := range stored {
+		have[r.BucketAt] = r.Up + r.Down
+	}
+	out := fresh[:0]
+	for _, r := range fresh {
+		if total, ok := have[r.BucketAt]; ok && r.Up+r.Down < total {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, nil
 }
 
 // FullReport bundles the per-monitor report: uptime, latency percentiles and

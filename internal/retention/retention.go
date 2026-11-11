@@ -350,6 +350,16 @@ func (p *Pruner) pruneDays(ctx context.Context, days int) (int64, error) {
 	return p.store.PruneBefore(ctx, cutoff)
 }
 
+// EffectiveDays is the heartbeat window the next prune pass will apply: the
+// Settings override when one is set, HEARTBEAT_RETENTION_DAYS otherwise. It is
+// exported for the jobs that must agree with the pruner about which raw
+// heartbeats still exist — the rollup backfill, in particular, which corrupted
+// days at the prune cutoff while it used the env value and the pruner did not.
+// An unreadable override is an error, for the reason resolveDays gives.
+func (p *Pruner) EffectiveDays(ctx context.Context) (int, error) {
+	return p.resolveDays(ctx)
+}
+
 // resolveDays picks the retention window for a pass: the runtime override from
 // DaysFunc when it supplies a positive value (clamped to sane bounds), otherwise
 // the static RetentionDays default.
