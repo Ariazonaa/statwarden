@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -117,8 +118,8 @@ const (
 )
 
 // settingString reads a settings key whose value is a JSON string, returning ""
-// when the key is absent or not a string. Used for the outbound webhook URL and
-// the metrics token.
+// when the key is absent or not a string. Used for the webhook URLs and the
+// instance name; sealed settings go through settingSealedString.
 func settingString(ctx context.Context, store api.Store, key string) (string, error) {
 	s, err := store.GetSetting(ctx, key)
 	if err != nil {
@@ -167,6 +168,20 @@ func settingWebhookURL(ctx context.Context, store api.Store, key string) (string
 // payload on an error, whereas "" would send it unsigned — quietly removing the
 // authentication the operator configured the moment ENCRYPTION_KEY is wrong.
 func settingWebhookSecret(ctx context.Context, store api.Store, box *secrets.Box, key string) (string, error) {
+	v, err := settingSealedString(ctx, store, box, key)
+	if err != nil {
+		return "", err
+	}
+	if err := api.CheckWebhookSecret(v); err != nil {
+		return "", fmt.Errorf("setting %q: %w", key, err)
+	}
+	return v, nil
+}
+
+// settingSealedString reads a string setting the API seals on write (see
+// api.isSecretSetting), opening it with the secrets box. A row written before
+// the key was sealed is plaintext JSON and passes through DecryptConfig as-is.
+func settingSealedString(ctx context.Context, store api.Store, box *secrets.Box, key string) (string, error) {
 	st, err := store.GetSetting(ctx, key)
 	if err != nil {
 		if errors.Is(err, api.ErrNotFound) {
@@ -184,10 +199,64 @@ func settingWebhookSecret(ctx context.Context, store api.Store, box *secrets.Box
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return "", fmt.Errorf("setting %q: %w", key, err)
 	}
-	if err := api.CheckWebhookSecret(v); err != nil {
-		return "", fmt.Errorf("setting %q: %w", key, err)
-	}
 	return v, nil
+}
+
+// metricsTokenTTL is how long a read of the /metrics scrape token is reused.
+// Short enough that a rotated token stops working within seconds, long enough
+// that a scrape every few seconds is not a settings query every few seconds.
+const metricsTokenTTL = 15 * time.Second
+
+// metricsTokenReadTimeout bounds one settings read for the token. It runs
+// detached from the request: a cancelled scrape must not be cached as "no
+// token" and close the endpoint for a whole TTL.
+const metricsTokenReadTimeout = 3 * time.Second
+
+// cachedToken serves a setting through a short-lived cache.
+type cachedToken struct {
+	read   func(context.Context) (string, error)
+	ttl    time.Duration
+	logger *slog.Logger
+	now    func() time.Time
+
+	mu      sync.Mutex
+	value   string
+	fetched time.Time
+	failing bool
+}
+
+func newCachedToken(read func(context.Context) (string, error), ttl time.Duration, logger *slog.Logger) *cachedToken {
+	return &cachedToken{read: read, ttl: ttl, logger: logger, now: time.Now}
+}
+
+// get returns the cached value, re-reading it once the TTL has passed. A read
+// that FAILS yields "" — which keeps /metrics closed, the safe direction — and
+// is cached like a success, so a database outage costs one query per TTL rather
+// than one per scrape. The failure is logged when it starts and when it ends,
+// not on every refresh.
+func (c *cachedToken) get(ctx context.Context) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.now()
+	if !c.fetched.IsZero() && now.Sub(c.fetched) < c.ttl {
+		return c.value
+	}
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), metricsTokenReadTimeout)
+	defer cancel()
+	v, err := c.read(readCtx)
+	c.fetched = now
+	if err != nil {
+		if !c.failing {
+			c.logger.Error("cannot read the metrics scrape token; /metrics is closed until it can", "error", err)
+		}
+		c.failing, c.value = true, ""
+		return ""
+	}
+	if c.failing {
+		c.logger.Info("metrics scrape token readable again")
+	}
+	c.failing, c.value = false, v
+	return v
 }
 
 // runRollups pre-aggregates heartbeats into hourly/daily buckets on a ticker,
@@ -386,7 +455,7 @@ func run() error {
 		reportSvc      *report.Service
 		pushRec        *push.Recorder
 		metricsHandler http.Handler
-		metricsToken   string
+		metricsToken   func(context.Context) string
 		// Declared out here so shutdown can join its delivery goroutine. Its
 		// drain POSTs to a URL it reads from settings, so it needs the pool that
 		// is closed on the way out of this function.
@@ -538,19 +607,18 @@ func run() error {
 			}
 		})
 
-		// Prometheus /metrics endpoint. The scrape token is read once and handed to
-		// both the handler (which enforces it) and the router (which keeps the
-		// endpoint closed entirely when no token is set, rather than open).
-		// A read that FAILS leaves the token empty, which keeps /metrics closed.
-		// That is the safe direction and the reason this one does not abort
-		// startup — but it is also indistinguishable from "no token configured"
-		// to anyone looking at the running server, so it is said out loud here.
-		var tokErr error
-		metricsToken, tokErr = settingString(ctx, store, "metrics_token")
-		if tokErr != nil {
-			logger.Error("cannot read the metrics scrape token; /metrics stays closed", "error", tokErr)
-		}
-		metricsHandler = metrics.Handler(
+		// Prometheus /metrics endpoint. The scrape token is a sealed setting,
+		// read per request through a short cache and handed to both the handler
+		// (which enforces it) and the router (which keeps the endpoint closed
+		// entirely when no token is set, rather than open). It used to be read
+		// once at startup, so rotating a leaked token did nothing until a
+		// restart. A read that fails yields "" and keeps /metrics closed — the
+		// safe direction — and cachedToken says so in the log.
+		tokenCache := newCachedToken(func(c context.Context) (string, error) {
+			return settingSealedString(c, store, box, api.SettingMetricsToken)
+		}, metricsTokenTTL, logger)
+		metricsToken = tokenCache.get
+		metricsHandler = metrics.HandlerFunc(
 			newMetricsSource(store, eng, cfg.EffectiveWorkerPoolSize()),
 			metricsToken,
 		)

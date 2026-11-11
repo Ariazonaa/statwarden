@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/Ariazonaa/statwarden/internal/config"
 )
@@ -106,6 +109,47 @@ func TestShutdownStopsHTTPBeforeTheDispatcher(t *testing.T) {
 	}
 	if pos["eng.Stop"] > pos["dispatcher.Stop"] {
 		t.Error("dispatcher.Stop runs before eng.Stop: the engine's last transitions have nobody to deliver them")
+	}
+}
+
+// TestMetricsTokenCacheRotatesWithinTheTTL pins the per-request token read.
+// The token used to be read once at startup, so a rotated (leaked) token kept
+// working until a restart; now a change is picked up within one TTL, while a
+// scrape every few seconds still costs at most one settings read per TTL.
+func TestMetricsTokenCacheRotatesWithinTheTTL(t *testing.T) {
+	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	stored, reads := "first", 0
+	var fail error
+	c := newCachedToken(func(context.Context) (string, error) {
+		reads++
+		return stored, fail
+	}, 15*time.Second, quietLogger())
+	c.now = func() time.Time { return now }
+
+	if got := c.get(context.Background()); got != "first" {
+		t.Fatalf("first read = %q", got)
+	}
+	stored = "second"
+	if got := c.get(context.Background()); got != "first" || reads != 1 {
+		t.Fatalf("within the TTL: got %q after %d reads, want the cached value from 1 read", got, reads)
+	}
+	now = now.Add(16 * time.Second)
+	if got := c.get(context.Background()); got != "second" {
+		t.Fatalf("after the TTL: got %q, want the rotated token", got)
+	}
+
+	// An unreadable token closes the endpoint rather than keeping a stale one
+	// open — the safe direction — and is cached too, so a broken database is
+	// not asked again on every scrape.
+	fail = errors.New("database down")
+	now = now.Add(16 * time.Second)
+	if got := c.get(context.Background()); got != "" {
+		t.Fatalf("on a read error: got %q, want \"\" (closed)", got)
+	}
+	before := reads
+	c.get(context.Background())
+	if reads != before {
+		t.Fatal("a failed read was retried within the TTL")
 	}
 }
 

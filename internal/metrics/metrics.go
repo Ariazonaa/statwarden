@@ -214,11 +214,19 @@ func NewRegistry(src Source) *prometheus.Registry {
 // per process — a scrape runs every few seconds, so logging every occurrence
 // would drown the log rather than inform anyone.
 func Handler(src Source, token string) http.Handler {
+	return HandlerFunc(src, func(context.Context) string { return token })
+}
+
+// HandlerFunc is Handler with the token read on every request, so a token
+// rotated or removed at runtime takes effect on the next scrape instead of at
+// the next restart — which matters most for the token you rotate because it
+// leaked. The function should be cheap; the caller is expected to cache.
+func HandlerFunc(src Source, tokenFn func(context.Context) string) http.Handler {
 	reg := NewRegistry(src)
 	promHandler := promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
 	var warnQueryToken sync.Once
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if token != "" {
+		if token := tokenFn(r.Context()); token != "" {
 			ok, viaQuery := tokenOK(r, token)
 			if !ok {
 				w.Header().Set("WWW-Authenticate", "Bearer")
