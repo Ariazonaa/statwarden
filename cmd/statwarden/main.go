@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -732,7 +731,7 @@ func run() error {
 		Maintenance:    maintProvider,
 		PublicBaseURL:  cfg.PublicBaseURL,
 		AllowedOrigins: cfg.AllowedOrigins,
-		SecureCookies:  strings.HasPrefix(cfg.PublicBaseURL, "https://"),
+		SecureCookies:  cfg.SecureCookies(),
 		TrustedProxies: cfg.TrustedProxies,
 		SessionTTL:     cfg.SessionTTL,
 		SessionSecret:  cfg.SessionSecret,

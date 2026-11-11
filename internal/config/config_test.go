@@ -527,6 +527,81 @@ func TestAddr(t *testing.T) {
 	}
 }
 
+// TestSecureCookies pins that the Secure attribute follows the PARSED scheme.
+// url.Parse lowercases it, so a mixed-case "HTTPS://" passes validation — and a
+// string-prefix check on the raw value then served the session cookie without
+// Secure on an https deployment.
+func TestSecureCookies(t *testing.T) {
+	cases := []struct {
+		url  string
+		want bool
+	}{
+		{"https://status.example.com", true},
+		{"HTTPS://status.example.com", true},
+		{"Https://status.example.com/", true},
+		{"http://status.example.com", false},
+		{"", false}, // default http://localhost:PORT
+	}
+	for _, tc := range cases {
+		env := required()
+		if tc.url != "" {
+			env["PUBLIC_BASE_URL"] = tc.url
+		}
+		cfg, err := Load(lookupMap(env))
+		if err != nil {
+			t.Fatalf("PUBLIC_BASE_URL=%q: Load() error = %v", tc.url, err)
+		}
+		if got := cfg.SecureCookies(); got != tc.want {
+			t.Errorf("PUBLIC_BASE_URL=%q: SecureCookies() = %v, want %v", tc.url, got, tc.want)
+		}
+	}
+}
+
+// TestPlainHTTPBaseURLWarns pins the warning for a production instance whose
+// public URL is plain http on a real host: every session cookie then travels
+// without Secure, which is fine on loopback and almost never intended anywhere
+// else. Not fatal — an intranet without TLS is a legitimate, if poor, choice.
+func TestPlainHTTPBaseURLWarns(t *testing.T) {
+	warned := func(env map[string]string) bool {
+		t.Helper()
+		cfg, err := Load(lookupMap(env))
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		for _, w := range cfg.Warnings {
+			if strings.Contains(w, "PUBLIC_BASE_URL") {
+				return true
+			}
+		}
+		return false
+	}
+	for _, tc := range []struct {
+		url  string
+		dev  bool
+		want bool
+	}{
+		{"http://status.example.com", false, true},
+		{"http://192.0.2.10:3001", false, true},
+		{"https://status.example.com", false, false},
+		{"http://localhost:3001", false, false},
+		{"http://127.0.0.1:3001", false, false},
+		{"http://[::1]:3001", false, false},
+		{"", false, false},
+		{"http://status.example.com", true, false},
+	} {
+		env := required()
+		if tc.url != "" {
+			env["PUBLIC_BASE_URL"] = tc.url
+		}
+		if tc.dev {
+			env["DEV_MODE"] = "true"
+		}
+		if got := warned(env); got != tc.want {
+			t.Errorf("PUBLIC_BASE_URL=%q DEV_MODE=%v: warned = %v, want %v", tc.url, tc.dev, got, tc.want)
+		}
+	}
+}
+
 // TestListenAddr pins the bind-address knob. Unset must keep the historical
 // ":PORT" (every interface), because changing that silently would take every
 // existing deployment off the network; set, it binds exactly that address, and
