@@ -218,6 +218,8 @@ type server struct {
 	pushLimiter   *rateLimiter
 	pushIPLimiter *rateLimiter
 	lockout       *lockout
+	// pagePw bounds and locks out page-password checks (statuspages_password.go).
+	pagePw passwordGuard
 
 	// openapi lazily renders the embedded API description for /openapi.json.
 	openapi openapiDoc

@@ -213,10 +213,42 @@ func (s *server) checkPagePassword(w http.ResponseWriter, r *http.Request, p Sta
 		supplied = r.Header.Get("X-Page-Password")
 	}
 	if supplied != "" {
-		if ok, _ := auth.VerifyPassword(supplied, p.PasswordHash); ok {
+		// The lockout is consulted BEFORE the hash, so a locked bucket costs a
+		// map lookup rather than another argon2 run — even when the password it
+		// carries is right. See statuspages_password.go.
+		g := s.pagePasswordGuard()
+		key := pagePasswordKey(p.Slug, clientIP(r))
+		if g.lockout.locked(key) {
+			w.Header().Set("Retry-After", lockoutRetryAfter())
+			writeProblemDetail(w, http.StatusTooManyRequests, "too many failed password attempts")
+			return false
+		}
+		timer := time.NewTimer(pagePasswordSlotWait)
+		select {
+		case g.slots <- struct{}{}:
+			timer.Stop()
+		case <-timer.C:
+			w.Header().Set("Retry-After", strconv.Itoa(pagePasswordRetryAfter))
+			writeProblemDetail(w, http.StatusServiceUnavailable, "too many password checks in progress")
+			return false
+		case <-r.Context().Done():
+			timer.Stop()
+			writeProblemDetail(w, http.StatusServiceUnavailable, "too many password checks in progress")
+			return false
+		}
+		ok := func() bool {
+			// Released by defer so a panic in the hash cannot leak the slot and
+			// shrink the pool for the life of the process.
+			defer func() { <-g.slots }()
+			ok, _ := auth.VerifyPassword(supplied, p.PasswordHash)
+			return ok
+		}()
+		if ok {
+			g.lockout.reset(key)
 			s.setPageUnlockCookie(w, r, p)
 			return true
 		}
+		g.lockout.fail(key)
 	}
 	w.Header().Set("X-Password-Required", "true")
 	writeProblemDetail(w, http.StatusUnauthorized, "password required")
