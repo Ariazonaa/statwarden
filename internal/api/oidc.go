@@ -281,11 +281,38 @@ type oidcClaims struct {
 	Azp               string          `json:"azp"`
 	Nonce             string          `json:"nonce"`
 	Email             string          `json:"email"`
-	EmailVerified     bool            `json:"email_verified"`
+	EmailVerified     oidcBool        `json:"email_verified"`
 	Name              string          `json:"name"`
 	PreferredUsername string          `json:"preferred_username"`
 	Exp               int64           `json:"exp"`
 	Iat               int64           `json:"iat"`
+}
+
+// oidcBool is a boolean claim that also accepts the JSON strings "true" and
+// "false".
+//
+// OIDC Core types email_verified as a boolean, but some providers (Amazon
+// Cognito among them) send it as a string. A plain bool field made
+// json.Unmarshal fail the whole ID token on such a provider, so every single
+// sign-on failed — not only provisioning, which is the one place the claim is
+// read. Anything other than true or a case-insensitive "true" reads as false,
+// which for this claim is the safe answer: an address not known to be verified
+// is treated as unverified.
+type oidcBool bool
+
+func (b *oidcBool) UnmarshalJSON(raw []byte) error {
+	var v bool
+	if err := json.Unmarshal(raw, &v); err == nil {
+		*b = oidcBool(v)
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		*b = oidcBool(strings.EqualFold(strings.TrimSpace(s), "true"))
+		return nil
+	}
+	*b = false
+	return nil
 }
 
 // audiences decodes the aud claim, which the spec allows to be either a single
