@@ -15,6 +15,56 @@ func quietLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// parseMain parses main.go for the source-level wiring tests below: run()
+// needs a database, so the composition root cannot be exercised directly.
+func parseMain(t *testing.T) *ast.File {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse main.go: %v", err)
+	}
+	return file
+}
+
+// TestHTTPServerBoundsHeaderSize pins MaxHeaderBytes on the server. Left at
+// zero, net/http allows 1 MiB of headers per request, and every unauthenticated
+// endpoint — the push heartbeat URL first among them — will buffer that much
+// before a handler can refuse anything.
+func TestHTTPServerBoundsHeaderSize(t *testing.T) {
+	found, set := false, false
+	ast.Inspect(parseMain(t), func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		sel, ok := lit.Type.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Server" {
+			return true
+		}
+		if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "http" {
+			return true
+		}
+		found = true
+		for _, elt := range lit.Elts {
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "MaxHeaderBytes" {
+					set = true
+				}
+			}
+		}
+		return true
+	})
+	if !found {
+		t.Fatal("no http.Server literal in main.go; this test needs updating")
+	}
+	if !set {
+		t.Fatal("the http.Server sets no MaxHeaderBytes, so every request may carry 1 MiB of headers")
+	}
+	if maxHeaderBytes <= 0 || maxHeaderBytes > 1<<20 {
+		t.Fatalf("maxHeaderBytes = %d, want a positive bound below net/http's 1 MiB default", maxHeaderBytes)
+	}
+}
+
 // Detection off must stay entirely inert, which is what the engine's nil guard
 // relies on.
 func TestNoAnomalyDetectorWhenDisabled(t *testing.T) {
