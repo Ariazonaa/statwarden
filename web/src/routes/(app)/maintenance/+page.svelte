@@ -163,6 +163,11 @@
 			const payload = {
 				title: fTitle,
 				description: fDesc || undefined,
+				// The update is full-replace and the mapper defaults a missing
+				// `active` to true, so leaving it out re-enabled every disabled
+				// window someone merely edited. This editor has no on/off control;
+				// it keeps whatever the window already was.
+				active: editing ? editing.active : true,
 				monitorIds: fMonitors,
 				strategy: fStrategy,
 				timezone: fTimezone,
