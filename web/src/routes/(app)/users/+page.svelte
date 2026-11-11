@@ -96,7 +96,7 @@
 			editorOpen = false;
 			toast.success(t('users.saved'));
 		} catch (e) {
-			toast.error(problemMessage(e) ?? 'Could not save the user.');
+			toast.error(problemMessage(e) ?? t('users.saveError'));
 		} finally {
 			saving = false;
 		}
@@ -108,7 +108,7 @@
 			confirmId = undefined;
 			toast.success(t('users.removed'));
 		} catch (e) {
-			toast.error(problemMessage(e) ?? 'Could not remove the user.');
+			toast.error(problemMessage(e) ?? t('users.removeError'));
 		}
 	}
 </script>

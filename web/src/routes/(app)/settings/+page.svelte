@@ -245,7 +245,7 @@
 			toast.success(t('settings.saved'));
 		} catch (e) {
 			if (settings) settings.sessionTtlDays = previous;
-			toast.error(problemMessage(e) ?? 'Could not save settings.');
+			toast.error(problemMessage(e) ?? t('settings.saveError'));
 		} finally {
 			savingTtl = false;
 		}
@@ -266,7 +266,7 @@
 			);
 			toast.success(t('settings.saved'));
 		} catch (e) {
-			toast.error(problemMessage(e) ?? 'Could not save settings.');
+			toast.error(problemMessage(e) ?? t('settings.saveError'));
 		} finally {
 			savingSettings = false;
 		}
@@ -355,7 +355,7 @@
 			// 403 is the re-authentication failing; the dialog shows it inline
 			// rather than closing and replacing it with a toast.
 			if (problemStatus(e) === 403) throw e;
-			toast.error(problemMessage(e) ?? 'Could not create the API key.');
+			toast.error(problemMessage(e) ?? t('settings.apiKeyCreateError'));
 		} finally {
 			creatingKey = false;
 		}

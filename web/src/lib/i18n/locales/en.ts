@@ -15,6 +15,11 @@ export const en = {
 	'common.continue': 'Continue',
 	'common.error': 'Something went wrong.',
 	'common.loadError': 'Could not load this. Try again.',
+	'ds.closeDialog': 'Close dialog',
+	'ds.clearSearch': 'Clear search',
+	'ds.dismissToast': 'Dismiss notification',
+	'ds.commandPalette': 'Command palette',
+	'ds.commands': 'Commands',
 	'common.delete': 'Delete',
 	'common.remove': 'Remove',
 	'common.edit': 'Edit',
@@ -382,6 +387,8 @@ export const en = {
 
 	// ---- Monitor not found (stale / hand-typed id) ----
 	'monitor.notFound': 'Monitor not found',
+	'monitor.loadError': 'Could not load this monitor.',
+	'monitor.listLoadError': 'Could not load monitors.',
 
 	// ---- Monitor detail ----
 	'monitorDetail.checkNow': 'Check now',
@@ -771,6 +778,8 @@ export const en = {
 	'notifications.deleted': 'Channel deleted',
 	'notifications.testSent': 'Test sent via {name}',
 	'notifications.testFailed': 'Test failed',
+	'notifications.saveError': 'Could not save the notification channel.',
+	'notifications.deleteError': 'Could not delete the channel.',
 
 	// ---- Tags ----
 	'tags.pageTitle': 'Tags · Statwarden',
@@ -789,6 +798,8 @@ export const en = {
 	'tags.nameRequired': 'Name is required.',
 	'tags.saved': 'Tag saved',
 	'tags.deleted': 'Tag deleted',
+	'tags.saveError': 'Could not save the tag.',
+	'tags.deleteError': 'Could not delete the tag.',
 
 	// ---- Maintenance ----
 	'maintenance.pageTitle': 'Maintenance · Statwarden',
@@ -811,6 +822,9 @@ export const en = {
 	'maintenance.titleRequired': 'Title is required.',
 	'maintenance.saved': 'Maintenance window saved',
 	'maintenance.deleted': 'Window deleted',
+	'maintenance.saveError': 'Could not save the maintenance window.',
+	'maintenance.deleteError': 'Could not delete the window.',
+	'maintenance.unknownMonitor': 'unknown monitor',
 	'maintenance.schedule': 'Schedule',
 	'maintenance.strategySingle': 'One-off',
 	'maintenance.strategyRecurring': 'Recurring',
@@ -854,6 +868,8 @@ export const en = {
 	'users.usernameRequired': 'Username is required.',
 	'users.saved': 'User saved',
 	'users.removed': 'User removed',
+	'users.saveError': 'Could not save the user.',
+	'users.removeError': 'Could not remove the user.',
 
 	// ---- Status pages (management) ----
 	'statusPages.pageTitle': 'Status pages · Statwarden',
@@ -1134,6 +1150,8 @@ export const en = {
 		'How long raw heartbeats are kept before the cleanup job prunes them. Lowering this deletes older data on the next run and cannot be undone.',
 	'settings.saveChanges': 'Save changes',
 	'settings.saved': 'Settings saved',
+	'settings.saveError': 'Could not save settings.',
+	'settings.apiKeyCreateError': 'Could not create the API key.',
 	'settings.appearance': 'Appearance',
 	'settings.appearanceSub': 'Theme follows the system unless overridden.',
 	'settings.theme': 'Theme',

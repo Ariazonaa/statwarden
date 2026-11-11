@@ -11,7 +11,12 @@ export const de: Messages = {
 	'common.cancel': 'Abbrechen',
 	'common.continue': 'Weiter',
 	'common.error': 'Da ist etwas schiefgelaufen.',
-	'common.loadError': 'Das konnte nicht geladen werden. Bitte versuche es erneut.',
+	'common.loadError': 'Das konnte nicht geladen werden. Versuche es erneut.',
+	'ds.closeDialog': 'Dialog schließen',
+	'ds.clearSearch': 'Suche leeren',
+	'ds.dismissToast': 'Hinweis schließen',
+	'ds.commandPalette': 'Befehlspalette',
+	'ds.commands': 'Befehle',
 	'common.delete': 'Löschen',
 	'common.remove': 'Entfernen',
 	'common.edit': 'Bearbeiten',
@@ -387,6 +392,8 @@ export const de: Messages = {
 
 	// ---- Monitor nicht gefunden (veraltete / eingegebene ID) ----
 	'monitor.notFound': 'Monitor nicht gefunden',
+	'monitor.loadError': 'Der Monitor konnte nicht geladen werden.',
+	'monitor.listLoadError': 'Die Monitore konnten nicht geladen werden.',
 
 	// ---- Monitor detail ----
 	'monitorDetail.checkNow': 'Jetzt prüfen',
@@ -788,6 +795,8 @@ export const de: Messages = {
 	'notifications.deleted': 'Kanal gelöscht',
 	'notifications.testSent': 'Test gesendet über {name}',
 	'notifications.testFailed': 'Test fehlgeschlagen',
+	'notifications.saveError': 'Der Benachrichtigungskanal konnte nicht gespeichert werden.',
+	'notifications.deleteError': 'Der Kanal konnte nicht gelöscht werden.',
 
 	// ---- Tags ----
 	'tags.pageTitle': 'Tags · Statwarden',
@@ -806,6 +815,8 @@ export const de: Messages = {
 	'tags.nameRequired': 'Name ist erforderlich.',
 	'tags.saved': 'Tag gespeichert',
 	'tags.deleted': 'Tag gelöscht',
+	'tags.saveError': 'Das Tag konnte nicht gespeichert werden.',
+	'tags.deleteError': 'Das Tag konnte nicht gelöscht werden.',
 
 	// ---- Maintenance ----
 	'maintenance.pageTitle': 'Wartung · Statwarden',
@@ -828,6 +839,9 @@ export const de: Messages = {
 	'maintenance.titleRequired': 'Titel ist erforderlich.',
 	'maintenance.saved': 'Wartungsfenster gespeichert',
 	'maintenance.deleted': 'Fenster gelöscht',
+	'maintenance.saveError': 'Das Wartungsfenster konnte nicht gespeichert werden.',
+	'maintenance.deleteError': 'Das Fenster konnte nicht gelöscht werden.',
+	'maintenance.unknownMonitor': 'unbekannter Monitor',
 	'maintenance.schedule': 'Zeitplan',
 	'maintenance.strategySingle': 'Einmalig',
 	'maintenance.strategyRecurring': 'Wiederkehrend',
@@ -872,6 +886,8 @@ export const de: Messages = {
 	'users.usernameRequired': 'Benutzername ist erforderlich.',
 	'users.saved': 'Benutzer gespeichert',
 	'users.removed': 'Benutzer entfernt',
+	'users.saveError': 'Der Benutzer konnte nicht gespeichert werden.',
+	'users.removeError': 'Der Benutzer konnte nicht entfernt werden.',
 
 	// ---- Status pages (management) ----
 	'statusPages.pageTitle': 'Statusseiten · Statwarden',
@@ -1150,6 +1166,8 @@ export const de: Messages = {
 		'Wie lange Roh-Heartbeats aufbewahrt werden, bevor der Aufräum-Job sie löscht. Ein niedrigerer Wert entfernt ältere Daten beim nächsten Lauf und lässt sich nicht rückgängig machen.',
 	'settings.saveChanges': 'Änderungen speichern',
 	'settings.saved': 'Einstellungen gespeichert',
+	'settings.saveError': 'Die Einstellungen konnten nicht gespeichert werden.',
+	'settings.apiKeyCreateError': 'Der API-Schlüssel konnte nicht erstellt werden.',
 	'settings.appearance': 'Darstellung',
 	'settings.appearanceSub': 'Das Design folgt dem System, sofern nicht überschrieben.',
 	'settings.theme': 'Design',

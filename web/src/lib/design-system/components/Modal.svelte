@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { t } from '$lib/i18n';
 	// Adaptive modal: centred glass dialog on desktop, bottom sheet
 	// (with grab handle) on small screens. Focus is trapped; Escape and
 	// scrim click dismiss.
@@ -144,7 +145,7 @@
 		<header class="head">
 			{#if title}<h2 class="title" id={titleId}>{title}</h2>{/if}
 			{#if dismissable}
-				<button class="close ds-focusable" aria-label="Close dialog" onclick={close}>
+				<button class="close ds-focusable" aria-label={t('ds.closeDialog')} onclick={close}>
 					<svg viewBox="0 0 16 16" aria-hidden="true">
 						<path
 							d="M4.5 4.5 11.5 11.5 M11.5 4.5 4.5 11.5"

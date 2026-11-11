@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { t } from '$lib/i18n';
 	// Pill-shaped search field on a glass background, with a clear button
 	// and optional keyboard-shortcut hint chip.
 	import Kbd from './Kbd.svelte';
@@ -59,7 +60,7 @@
 		}}
 	/>
 	{#if value}
-		<button class="clear ds-focusable" aria-label="Clear search" onclick={clear}>
+		<button class="clear ds-focusable" aria-label={t('ds.clearSearch')} onclick={clear}>
 			<svg viewBox="0 0 16 16" aria-hidden="true">
 				<path
 					d="M4.5 4.5 11.5 11.5 M11.5 4.5 4.5 11.5"

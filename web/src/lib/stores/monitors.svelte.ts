@@ -14,6 +14,7 @@ import {
 } from '$lib/api';
 import { ws, type WsEnvelope } from '$lib/ws/store.svelte';
 import { toast } from '$lib/design-system';
+import { t } from '$lib/i18n';
 
 interface HeartbeatData extends Heartbeat {}
 interface StateChangeData {
@@ -59,7 +60,7 @@ class MonitorsStore {
 			this.items = await api.listMonitors();
 			this.loaded = true;
 		} catch (e) {
-			this.error = problemMessage(e) ?? 'Could not load monitors.';
+			this.error = problemMessage(e) ?? t('monitor.listLoadError');
 		}
 	}
 
