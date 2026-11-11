@@ -2,8 +2,11 @@ package report
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-pdf/fpdf"
 )
 
 // TestWriteSLAPDF asserts WriteSLAPDF emits a non-empty, structurally valid PDF
@@ -67,4 +70,30 @@ func firstBytes(b []byte, n int) []byte {
 		return b
 	}
 	return b[:n]
+}
+
+// clipToWidth used to drop one byte at a time and re-measure the whole rest,
+// which is quadratic in the name: an 80 000-character monitor name took over a
+// second and a 1 MiB one minutes, per report. It now cuts hard first, so the
+// cost no longer depends on how long the stored name is.
+func TestClipToWidthIsNotQuadratic(t *testing.T) {
+	pdf := fpdf.New("P", "mm", "A4", "")
+	pdf.AddPage()
+	pdf.SetFont("Helvetica", "", 9)
+	long := strings.Repeat("W", 200_000)
+
+	start := time.Now()
+	got := clipToWidth(pdf, long, 60)
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("clipping a 200 000-byte name took %v", d)
+	}
+	if pdf.GetStringWidth(got) > 60 {
+		t.Fatalf("the clipped name is %.1f mm wide, want at most 60", pdf.GetStringWidth(got))
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("a cut name carries no ellipsis: %q", got)
+	}
+	if short := clipToWidth(pdf, "API", 60); short != "API" {
+		t.Fatalf("a name that fits was changed to %q", short)
+	}
 }

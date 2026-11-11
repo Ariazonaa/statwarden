@@ -27,6 +27,10 @@ func (s *server) handleCreateMonitorGroup(w http.ResponseWriter, r *http.Request
 		writeProblemDetail(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	if err := checkLength("name", req.Name, maxNameRunes); err != nil {
+		writeProblemDetail(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	g, err := s.store.CreateMonitorGroup(r.Context(), req.Name, req.SortOrder)
 	if storeError(w, err) {
 		return
@@ -48,6 +52,10 @@ func (s *server) handleUpdateMonitorGroup(w http.ResponseWriter, r *http.Request
 	}
 	if req.Name == "" {
 		writeProblemDetail(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if err := checkLength("name", req.Name, maxNameRunes); err != nil {
+		writeProblemDetail(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	g, err := s.store.UpdateMonitorGroup(r.Context(), id, req.Name, req.SortOrder)
