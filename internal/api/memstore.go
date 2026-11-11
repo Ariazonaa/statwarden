@@ -1402,6 +1402,13 @@ func (m *MemStore) DeleteTag(_ context.Context, id int64) error {
 		return ErrNotFound
 	}
 	delete(m.tags, id)
+	// monitor_tags cascades on PostgreSQL; without this a monitor kept listing
+	// the deleted tag, and its next save was refused for naming it.
+	for mid, ids := range m.monTags {
+		if next := withoutID(ids, id); next != nil {
+			m.monTags[mid] = next
+		}
+	}
 	return nil
 }
 
@@ -1458,6 +1465,12 @@ func (m *MemStore) DeleteNotification(_ context.Context, id int64) error {
 		return ErrNotFound
 	}
 	delete(m.notifs, id)
+	// Mirrors the monitor_notifications cascade, as DeleteTag does for tags.
+	for mid, ids := range m.monNotifs {
+		if next := withoutID(ids, id); next != nil {
+			m.monNotifs[mid] = next
+		}
+	}
 	return nil
 }
 
