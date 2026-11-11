@@ -1895,8 +1895,39 @@ func (m *MemStore) ListIncidents(_ context.Context, pageID int64) ([]Incident, e
 		if out[i].Pinned != out[j].Pinned {
 			return out[i].Pinned
 		}
-		return out[i].StartedAt.After(out[j].StartedAt)
+		// id breaks started_at ties, as in PgStore: two incidents opened within
+		// one clock tick must not swap places between calls.
+		if !out[i].StartedAt.Equal(out[j].StartedAt) {
+			return out[i].StartedAt.After(out[j].StartedAt)
+		}
+		return out[i].ID > out[j].ID
 	})
+	return out, nil
+}
+
+// ListPublicIncidents applies the public selection to the full ordered list;
+// see the Store interface for the rule PgStore expresses in SQL.
+func (m *MemStore) ListPublicIncidents(ctx context.Context, pageID int64, recent, limit int) ([]Incident, error) {
+	all, err := m.ListIncidents(ctx, pageID)
+	if err != nil {
+		return nil, err
+	}
+	out := []Incident{}
+	resolved := 0
+	for _, in := range all {
+		if in.Status != IncidentResolved {
+			out = append(out, in)
+			continue
+		}
+		switch {
+		case resolved < recent:
+		case in.PostmortemPublishedAt != nil && resolved < limit:
+		default:
+			continue
+		}
+		resolved++
+		out = append(out, in)
+	}
 	return out, nil
 }
 

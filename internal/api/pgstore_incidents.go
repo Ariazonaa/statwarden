@@ -56,7 +56,40 @@ func (s *PgStore) CreateIncident(ctx context.Context, in Incident) (Incident, er
 }
 
 func (s *PgStore) ListIncidents(ctx context.Context, pageID int64) ([]Incident, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+incidentCols+` FROM incidents WHERE status_page_id = $1 ORDER BY pinned DESC, started_at DESC`, pageID)
+	// id DESC breaks started_at ties, so the order — and with it which incidents
+	// the public selection keeps — does not depend on the plan.
+	return s.queryIncidents(ctx, `SELECT `+incidentCols+` FROM incidents WHERE status_page_id = $1
+		ORDER BY pinned DESC, started_at DESC, id DESC`, pageID)
+}
+
+// ListPublicIncidents applies the public page's selection in SQL. The resolved
+// branch numbers the page's resolved incidents in display order and keeps the
+// first $2 plus any with a published post-mortem, then cuts the run at $3 —
+// the same rule buildPublicPageView applies walking the full list, which is
+// why the two agree.
+func (s *PgStore) ListPublicIncidents(ctx context.Context, pageID int64, recent, limit int) ([]Incident, error) {
+	return s.queryIncidents(ctx, `
+		(SELECT `+incidentCols+` FROM incidents WHERE status_page_id = $1 AND status <> 'resolved')
+		UNION ALL
+		(SELECT `+incidentCols+` FROM (
+			SELECT `+incidentCols+`,
+				row_number() OVER (ORDER BY pinned DESC, started_at DESC, id DESC) AS rn
+			FROM incidents WHERE status_page_id = $1 AND status = 'resolved'
+		) resolved
+		WHERE rn <= $2 OR postmortem_published_at IS NOT NULL
+		ORDER BY pinned DESC, started_at DESC, id DESC
+		LIMIT $3)
+		ORDER BY pinned DESC, started_at DESC, id DESC`, pageID, recent, limit)
+}
+
+// queryIncidents runs an incident query and loads every row's monitors and
+// timeline in two further queries, whatever the row count.
+//
+// The detail used to be loaded per incident, two queries each, so every
+// anonymous page view and every badge cost 1 + 2n round trips for a page with
+// n incidents in its history.
+func (s *PgStore) queryIncidents(ctx context.Context, q string, args ...any) ([]Incident, error) {
+	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, mapErr(err)
 	}
@@ -72,12 +105,62 @@ func (s *PgStore) ListIncidents(ctx context.Context, pageID int64) ([]Incident, 
 	if err := rows.Err(); err != nil {
 		return nil, mapErr(err)
 	}
-	for i := range out {
-		if err := s.loadIncidentDetail(ctx, &out[i]); err != nil {
-			return nil, mapErr(err)
+	rows.Close()
+	return out, mapErr(s.loadIncidentDetails(ctx, out))
+}
+
+// loadIncidentDetails fills MonitorIDs and Updates for every incident in list
+// with one query each, keyed back to the incident by id. Both start empty,
+// never nil, for the reasons loadIncidentDetail gives.
+func (s *PgStore) loadIncidentDetails(ctx context.Context, list []Incident) error {
+	if len(list) == 0 {
+		return nil
+	}
+	ids := make([]int64, len(list))
+	byID := make(map[int64]int, len(list))
+	for i := range list {
+		list[i].MonitorIDs = []int64{}
+		list[i].Updates = []IncidentUpdate{}
+		ids[i] = list[i].ID
+		byID[list[i].ID] = i
+	}
+	rows, err := s.pool.Query(ctx, `SELECT incident_id, monitor_id FROM incident_monitors
+		WHERE incident_id = ANY($1) ORDER BY incident_id, monitor_id`, ids)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var incID, mid int64
+		if err := rows.Scan(&incID, &mid); err != nil {
+			rows.Close()
+			return err
+		}
+		if i, ok := byID[incID]; ok {
+			list[i].MonitorIDs = append(list[i].MonitorIDs, mid)
 		}
 	}
-	return out, nil
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	urows, err := s.pool.Query(ctx, `SELECT id, incident_id, status, body, created_by, created_at FROM incident_updates
+		WHERE incident_id = ANY($1) ORDER BY incident_id, created_at, id`, ids)
+	if err != nil {
+		return err
+	}
+	defer urows.Close()
+	for urows.Next() {
+		var u IncidentUpdate
+		var createdBy *int64
+		if err := urows.Scan(&u.ID, &u.IncidentID, &u.Status, &u.Body, &createdBy, &u.CreatedAt); err != nil {
+			return err
+		}
+		u.CreatedBy = createdBy
+		if i, ok := byID[u.IncidentID]; ok {
+			list[i].Updates = append(list[i].Updates, u)
+		}
+	}
+	return urows.Err()
 }
 
 func (s *PgStore) GetIncident(ctx context.Context, id int64) (Incident, error) {
