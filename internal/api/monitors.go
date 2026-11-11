@@ -462,6 +462,14 @@ func (s *server) handleMonitorStatus(w http.ResponseWriter, r *http.Request) {
 // maxRecoveryChecks bounds monitorRequest.RecoveryChecks.
 const maxRecoveryChecks = 100
 
+// Ceilings for the remaining numeric monitor fields: a year, in the unit each
+// field is written in, and a retry count no real schedule reaches.
+const (
+	maxMonitorSeconds = 365 * 24 * 60 * 60
+	maxResendMinutes  = 365 * 24 * 60
+	maxMonitorRetries = 10000
+)
+
 // validateMonitor checks required fields and delegates type-specific config
 // validation to the registered checker.
 func (s *server) validateMonitor(req monitorRequest) error {
@@ -472,8 +480,25 @@ func (s *server) validateMonitor(req monitorRequest) error {
 	if !ok {
 		return validationError("unknown monitor type " + req.Type)
 	}
-	if req.Interval < 1 {
-		return validationError("interval_seconds must be >= 1")
+	// The bounds mirror the monitors table's CHECK constraints, plus a ceiling
+	// under the int4 columns and the Duration the engine widens each field to.
+	// Without them PostgreSQL rejected the row as a 500 that MemStore accepted.
+	if req.Interval < 1 || req.Interval > maxMonitorSeconds {
+		return validationError(fmt.Sprintf("interval_seconds must be between 1 and %d", maxMonitorSeconds))
+	}
+	// null is the per-type default; 0 is not a timeout and the column refuses it.
+	if req.Timeout != nil && (*req.Timeout < 1 || *req.Timeout > maxMonitorSeconds) {
+		return validationError(fmt.Sprintf("timeout_seconds must be null or between 1 and %d", maxMonitorSeconds))
+	}
+	if req.MaxRetries < 0 || req.MaxRetries > maxMonitorRetries {
+		return validationError(fmt.Sprintf("max_retries must be between 0 and %d", maxMonitorRetries))
+	}
+	// 0 means "same as interval_seconds" (see monitorInput).
+	if req.RetryInterval < 0 || req.RetryInterval > maxMonitorSeconds {
+		return validationError(fmt.Sprintf("retry_interval_seconds must be between 0 and %d", maxMonitorSeconds))
+	}
+	if req.ResendInterval < 0 || req.ResendInterval > maxResendMinutes {
+		return validationError(fmt.Sprintf("resend_interval_minutes must be between 0 and %d", maxResendMinutes))
 	}
 	// The ceiling is a sanity bound, not a policy: past it a monitor would take
 	// hours to be believed back up, which is a typo, not a setting.
@@ -558,6 +583,25 @@ func (s *server) validateMonitorRelations(ctx context.Context, id int64, req mon
 		if _, err := s.store.GetMonitorGroup(ctx, *req.GroupID); err != nil {
 			if errors.Is(err, ErrNotFound) {
 				return validationError("group_id references an unknown monitor group")
+			}
+			return err
+		}
+	}
+	// The link tables' foreign keys turned an unknown id into a 500 on
+	// PostgreSQL, and MemStore stored the dangling id. Same check the bulk
+	// actions already make.
+	for _, tagID := range req.TagIDs {
+		if _, err := s.store.GetTag(ctx, tagID); err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return validationError("tag_ids references an unknown tag")
+			}
+			return err
+		}
+	}
+	for _, nid := range req.NotificationIDs {
+		if _, err := s.store.GetNotification(ctx, nid); err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return validationError("notification_ids references an unknown notification")
 			}
 			return err
 		}
