@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import LoadFailed from '$lib/components/LoadFailed.svelte';
 	import {
 		api,
 		problemMessage,
@@ -42,6 +43,7 @@
 	let items = $state<MaintenanceWindow[]>([]);
 	let allMonitors = $state<Monitor[]>([]);
 	let loaded = $state(false);
+	let loadFailed = $state(false);
 
 	let editorOpen = $state(false);
 	let editing = $state<MaintenanceWindow | undefined>(undefined);
@@ -83,10 +85,18 @@
 	);
 	const nextRun = $derived(recurrenceValid ? nextOccurrence(draftRecurrence, fTimezone) : null);
 
-	onMount(async () => {
-		[items, allMonitors] = await Promise.all([api.listMaintenance(), api.listMonitors()]);
-		loaded = true;
-	});
+	async function load() {
+		loaded = false;
+		loadFailed = false;
+		try {
+			[items, allMonitors] = await Promise.all([api.listMaintenance(), api.listMonitors()]);
+		} catch {
+			loadFailed = true;
+		} finally {
+			loaded = true;
+		}
+	}
+	onMount(load);
 
 	/**
 	 * The zone a one-off window's datetime-local fields are read in: the one every
@@ -273,6 +283,8 @@
 
 {#if !loaded}
 	<Skeleton variant="rect" height="8rem" />
+{:else if loadFailed}
+	<LoadFailed onretry={load} />
 {:else if items.length === 0}
 	<GlassPanel radius="lg" class="mt-wrap">
 		<EmptyState title={t('maintenance.emptyTitle')} description={t('maintenance.emptyDescription')}>

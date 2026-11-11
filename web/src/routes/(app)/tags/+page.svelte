@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import LoadFailed from '$lib/components/LoadFailed.svelte';
 	import { api, problemMessage, type Tag } from '$lib/api';
 	import { session } from '$lib/stores/session.svelte';
 	import { t } from '$lib/i18n';
@@ -15,6 +16,7 @@
 
 	let items = $state<Tag[]>([]);
 	let loaded = $state(false);
+	let loadFailed = $state(false);
 
 	let editorOpen = $state(false);
 	let editing = $state<Tag | undefined>(undefined);
@@ -25,10 +27,18 @@
 
 	const swatches = ['#ef4444', '#f59e0b', '#10b981', '#0ea5e9', '#8b5cf6', '#ec4899', '#64748b'];
 
-	onMount(async () => {
-		items = await api.listTags();
-		loaded = true;
-	});
+	async function load() {
+		loaded = false;
+		loadFailed = false;
+		try {
+			items = await api.listTags();
+		} catch {
+			loadFailed = true;
+		} finally {
+			loaded = true;
+		}
+	}
+	onMount(load);
 
 	function openCreate() {
 		editing = undefined;
@@ -86,6 +96,8 @@
 
 {#if !loaded}
 	<Skeleton variant="rect" height="6rem" />
+{:else if loadFailed}
+	<LoadFailed onretry={load} />
 {:else if items.length === 0}
 	<GlassPanel radius="lg" class="tg-wrap">
 		<EmptyState title={t('tags.emptyTitle')} description={t('tags.emptyDescription')}>
