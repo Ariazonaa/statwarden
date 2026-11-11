@@ -14,6 +14,7 @@ export const en = {
 	'common.cancel': 'Cancel',
 	'common.continue': 'Continue',
 	'common.error': 'Something went wrong.',
+	'common.loadError': 'Could not load this. Try again.',
 	'common.delete': 'Delete',
 	'common.remove': 'Remove',
 	'common.edit': 'Edit',
