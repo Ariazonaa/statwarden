@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/miekg/dns"
 
@@ -220,5 +222,85 @@ func TestCheckRejectsInvalidConfig(t *testing.T) {
 	var ch Checker
 	if _, err := ch.Check(context.Background(), json.RawMessage(`{"host":"x","record_type":"WHAT"}`)); err == nil {
 		t.Fatal("Check must reject an unknown record type")
+	}
+}
+
+// stubResolverUDPTCP serves the handler on UDP and TCP at the same loopback
+// address, the way a real resolver does.
+func stubResolverUDPTCP(t *testing.T, handler dns.HandlerFunc) string {
+	t.Helper()
+	for range 10 {
+		pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ln, err := net.Listen("tcp", pc.LocalAddr().String())
+		if err != nil { // the port is taken for TCP; try another
+			_ = pc.Close()
+			continue
+		}
+		udp := &dns.Server{PacketConn: pc, Handler: handler}
+		tcp := &dns.Server{Listener: ln, Handler: handler}
+		go func() { _ = udp.ActivateAndServe() }()
+		go func() { _ = tcp.ActivateAndServe() }()
+		t.Cleanup(func() { _ = udp.Shutdown(); _ = tcp.Shutdown() })
+		return pc.LocalAddr().String()
+	}
+	t.Fatal("no loopback port free for both UDP and TCP")
+	return ""
+}
+
+// An answer too large for a UDP datagram arrives truncated. Without EDNS0 that
+// limit is 512 bytes — a few TXT records — and without retrying over TCP the
+// check judged the truncated, often empty, answer: DOWN for a name that
+// resolves fine.
+func TestCheckAdvertisesEDNS0AndRetriesTruncatedAnswersOverTCP(t *testing.T) {
+	var sawEDNS0 atomic.Bool
+	addr := stubResolverUDPTCP(t, func(w dns.ResponseWriter, req *dns.Msg) {
+		m := new(dns.Msg)
+		m.SetReply(req)
+		if _, udp := w.LocalAddr().(*net.UDPAddr); udp {
+			sawEDNS0.Store(req.IsEdns0() != nil)
+			m.Truncated = true
+			_ = w.WriteMsg(m)
+			return
+		}
+		rr, _ := dns.NewRR(`example.test. 60 IN TXT "v=spf1 -all"`)
+		m.Answer = []dns.RR{rr}
+		_ = w.WriteMsg(m)
+	})
+
+	var ch Checker
+	res, err := ch.Check(context.Background(), mustCfg(t, Config{Host: "example.test", RecordType: "TXT", Resolver: addr}))
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if res.Status != domain.StatusUp || !strings.Contains(res.Message, "v=spf1") {
+		t.Fatalf("Check() = %s (%s), want the full answer fetched over TCP", res.Status, res.Message)
+	}
+	if !sawEDNS0.Load() {
+		t.Error("the UDP query carried no EDNS0 OPT record")
+	}
+}
+
+// The resolver gets the check's whole timeout. miekg/dns otherwise applies its
+// own 2s read timeout, so a resolver answering in 2.5s was DOWN with
+// "i/o timeout" although the monitor allowed far longer.
+func TestCheckGivesTheResolverTheWholeTimeout(t *testing.T) {
+	rr, _ := dns.NewRR("example.test. 60 IN A 192.0.2.1")
+	addr := stubResolver(t, func(w dns.ResponseWriter, req *dns.Msg) {
+		time.Sleep(2500 * time.Millisecond)
+		answerHandler(dns.RcodeSuccess, rr)(w, req)
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var ch Checker
+	res, err := ch.Check(ctx, mustCfg(t, Config{Host: "example.test", RecordType: "A", Resolver: addr}))
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if res.Status != domain.StatusUp {
+		t.Fatalf("Check() = %s (%s), want up within the 5s timeout", res.Status, res.Message)
 	}
 }

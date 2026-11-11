@@ -83,6 +83,9 @@ func (ch *Checker) Check(ctx context.Context, cfg json.RawMessage) (domain.Check
 	msg := new(dns.Msg)
 	msg.SetQuestion(qname, qt)
 	msg.RecursionDesired = true
+	// Without EDNS0 a UDP answer is capped at 512 bytes — a handful of TXT
+	// records — and anything longer comes back truncated.
+	msg.SetEdns0(ednsUDPSize, false)
 
 	start := time.Now()
 	resp, err := ch.doExchange(ctx, msg, addr)
@@ -154,12 +157,36 @@ func (ch *Checker) resolver(c Config) (string, error) {
 	return net.JoinHostPort(conf.Servers[0], port), nil
 }
 
+// ednsUDPSize is the UDP payload size advertised through EDNS0: the common
+// default that stays clear of IP fragmentation on ordinary paths.
+const ednsUDPSize = 1232
+
 // doExchange runs the injected or default DNS transport.
+//
+// The default asks over UDP and repeats the query over TCP when the answer
+// comes back truncated, as a stub resolver must: judging the truncated answer
+// reported a name with a large record set as having none.
 func (ch *Checker) doExchange(ctx context.Context, msg *dns.Msg, addr string) (*dns.Msg, error) {
 	if ch.exchange != nil {
 		return ch.exchange(ctx, msg, addr)
 	}
-	client := &dns.Client{Net: "udp"}
+	resp, err := exchangeOver(ctx, "udp", msg, addr)
+	if err == nil && resp.Truncated {
+		resp, err = exchangeOver(ctx, "tcp", msg, addr)
+	}
+	return resp, err
+}
+
+// exchangeOver performs one query over the given network. The client timeout
+// is the check's remaining time: miekg/dns otherwise applies its own 2s per
+// read and write, which overrode a longer timeout configured on the monitor.
+func exchangeOver(ctx context.Context, network string, msg *dns.Msg, addr string) (*dns.Msg, error) {
+	client := &dns.Client{Net: network}
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining > 0 {
+			client.Timeout = remaining
+		}
+	}
 	resp, _, err := client.ExchangeContext(ctx, msg, addr)
 	return resp, err
 }
