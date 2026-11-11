@@ -15,6 +15,8 @@ type MemStore struct {
 	monitors   map[int64]*domain.Monitor
 	byToken    map[string]int64
 	heartbeats []domain.Heartbeat
+	// statusSince mirrors monitors.updated_at for the cases tests set it.
+	statusSince map[int64]time.Time
 }
 
 // NewMemStore seeds a MemStore with the given monitors. Their PushToken fields
@@ -22,8 +24,9 @@ type MemStore struct {
 // PgStore which stores only the hash.
 func NewMemStore(monitors ...domain.Monitor) *MemStore {
 	s := &MemStore{
-		monitors: make(map[int64]*domain.Monitor),
-		byToken:  make(map[string]int64),
+		monitors:    make(map[int64]*domain.Monitor),
+		byToken:     make(map[string]int64),
+		statusSince: make(map[int64]time.Time),
 	}
 	for i := range monitors {
 		m := monitors[i]
@@ -116,7 +119,7 @@ func (s *MemStore) ListPushMonitors(_ context.Context) ([]PushMonitor, error) {
 			continue
 		}
 		last, has := s.lastSeenLocked(m.ID)
-		out = append(out, PushMonitor{Monitor: *m, LastSeen: last, HasHeartbeat: has})
+		out = append(out, PushMonitor{Monitor: *m, LastSeen: last, HasHeartbeat: has, StatusSince: s.statusSince[m.ID]})
 	}
 	return out, nil
 }
@@ -131,6 +134,18 @@ func (s *MemStore) lastSeenLocked(monitorID int64) (time.Time, bool) {
 		}
 	}
 	return last, found
+}
+
+// MarkResumed records a resume at the given time: the monitor is active again
+// and PENDING from then on, as the API's resume writes it (test helper).
+func (s *MemStore) MarkResumed(id int64, at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if m, ok := s.monitors[id]; ok {
+		m.Active = true
+		m.Status = domain.StatusPending
+		s.statusSince[id] = at
+	}
 }
 
 // Heartbeats returns a copy of the recorded heartbeats (test helper).

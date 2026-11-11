@@ -403,3 +403,24 @@ func TestWatchdogReportsTheTrip(t *testing.T) {
 		t.Fatalf("OnStatus calls = %+v, want one (1, down)", log)
 	}
 }
+
+// A paused push monitor stops receiving beats on purpose, so on Resume its last
+// heartbeat is as old as the pause. Measured from that, the deadline had long
+// passed and the first sweep tripped the monitor DOWN — and paged — before its
+// agent could possibly have reported in. The deadline runs from the resume.
+func TestWatchdogMeasuresAResumedMonitorFromTheResume(t *testing.T) {
+	store := NewMemStore(pushMonitor(1, "tok", domain.StatusUp))
+	_ = store.SaveHeartbeat(context.Background(), domain.Heartbeat{MonitorID: 1, CheckedAt: time.Unix(1000, 0), Status: domain.StatusUp})
+	store.MarkResumed(1, time.Unix(5000, 0)) // paused at ~1000, resumed at 5000
+
+	now := time.Unix(5050, 0) // inside the window that started at the resume
+	w := NewWatchdog(Options{Store: store, Clock: func() time.Time { return now }})
+	if n, err := w.Sweep(context.Background()); err != nil || n != 0 {
+		t.Fatalf("Sweep right after resume tripped %d (err %v), want 0", n, err)
+	}
+
+	now = time.Unix(5100, 0) // 5000 + 60 + 30 has passed without a beat
+	if n, err := w.Sweep(context.Background()); err != nil || n != 1 {
+		t.Fatalf("Sweep after the resumed window tripped %d (err %v), want 1", n, err)
+	}
+}
