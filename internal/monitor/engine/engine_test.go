@@ -1,6 +1,7 @@
 package engine_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Ariazonaa/statwarden/internal/anomaly"
 	"github.com/Ariazonaa/statwarden/internal/domain"
@@ -1765,4 +1767,44 @@ func TestFailedStatusWriteIsRetried(t *testing.T) {
 		st, ok := store.Status(1)
 		return ok && st == domain.StatusUp
 	})
+}
+
+// TestHeartbeatTextIsStorable: a checker's message and extra carry text the
+// TARGET chose — an SNMP OctetString, a game server's name — and PostgreSQL
+// rejects a NUL byte or invalid UTF-8 in text and a \u0000 escape in jsonb.
+// Such a heartbeat failed to insert, so the check left no trace at all.
+func TestHeartbeatTextIsStorable(t *testing.T) {
+	reg := registry.New()
+	chk := &scriptChecker{typ: "fake", fallback: domain.CheckResult{
+		Status:  domain.StatusUp,
+		Message: "name=a\x00b\xffc",
+		Extra:   json.RawMessage(`{"name":"x\u0000y","n\u0000":["\u0000"],"keep":"a\\u0000b","num":1.50}`),
+	}}
+	reg.Register(chk)
+
+	e, store, _ := newEngine(t, engine.Options{Registry: reg})
+	if err := e.Upsert(testMonitor(1, "fake")); err != nil {
+		t.Fatal(err)
+	}
+	checkNowAndWait(t, e, store, 1, 1)
+	hb := store.Heartbeats()[0]
+	if strings.ContainsRune(hb.Message, 0) || !utf8.ValidString(hb.Message) {
+		t.Fatalf("message %q is not storable", hb.Message)
+	}
+	if hb.Message != "name=ab�c" {
+		t.Fatalf("message = %q, want the text kept apart from the bad bytes", hb.Message)
+	}
+	if bytes.Contains(hb.Extra, []byte(`\u0000`)) && !bytes.Contains(hb.Extra, []byte(`\u0000`)) {
+		t.Fatalf("extra %s still carries a NUL escape", hb.Extra)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(hb.Extra, &got); err != nil {
+		t.Fatalf("extra %s is not JSON: %v", hb.Extra, err)
+	}
+	if got["name"] != "xy" || got["keep"] != `a\u0000b` || got["n"] == nil {
+		t.Fatalf("extra = %v, want NULs removed and everything else intact", got)
+	}
+	if !bytes.Contains(hb.Extra, []byte(`1.50`)) {
+		t.Fatalf("extra %s lost the number's original spelling", hb.Extra)
+	}
 }

@@ -979,15 +979,19 @@ func (e *Engine) persist(m domain.Monitor, res domain.CheckResult, next domain.M
 	if latency > 0 && latency < time.Millisecond {
 		latency = time.Millisecond
 	}
+	extra, ok := storableExtra(res.Extra)
+	if !ok {
+		e.log.Warn("engine: dropping heartbeat extra that is not valid JSON", "monitor_id", m.ID, "type", m.Type)
+	}
 	hb := domain.Heartbeat{
 		MonitorID: m.ID,
 		CheckedAt: now,
 		Status:    next,
 		Latency:   &latency,
-		Message:   res.Message,
+		Message:   storableText(res.Message),
 		Important: transitioned,
 		Retries:   retriesNow,
-		Extra:     res.Extra,
+		Extra:     extra,
 	}
 	if err := e.store.SaveHeartbeat(ctx, hb); err != nil {
 		e.log.Error("engine: save heartbeat", "monitor_id", m.ID, "error", err)
