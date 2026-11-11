@@ -494,6 +494,92 @@ func TestEnvExampleSecretsAreRejected(t *testing.T) {
 	}
 }
 
+// parseSystemdEnvironmentFile reads a file the way systemd's EnvironmentFile=
+// does, which is how deploy/statwarden.service consumes the installed copy of
+// .env.example. The rule that matters: a line is a comment only when it STARTS
+// with # or ;. A `#` after a value is part of the value, so `LOG_LEVEL=info  #
+// debug | info` hands the app "info  # debug | info". Leading and trailing
+// whitespace around an unquoted value is dropped; a quoted value is taken
+// verbatim between its quotes.
+func parseSystemdEnvironmentFile(content string) map[string]string {
+	out := map[string]string{}
+	for line := range strings.SplitSeq(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] == '#' || line[0] == ';' {
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		val = strings.TrimSpace(val)
+		if n := len(val); n >= 2 && (val[0] == '"' || val[0] == '\'') && val[n-1] == val[0] {
+			val = val[1 : n-1]
+		}
+		out[key] = val
+	}
+	return out
+}
+
+// TestEnvExampleLoadsUnderSystemd feeds .env.example through config.Load as
+// systemd would hand it over. The unit installs this file verbatim as its
+// EnvironmentFile, and the inline comments it used to carry turned values such
+// as LOG_LEVEL and DEFAULT_CHECK_INTERVAL into strings with a comment glued on,
+// so the documented bare-metal install refused to start even with both
+// secrets filled in.
+func TestEnvExampleLoadsUnderSystemd(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", ".env.example"))
+	if err != nil {
+		t.Fatalf("reading .env.example: %v", err)
+	}
+	env := parseSystemdEnvironmentFile(string(raw))
+	if len(env) < 10 {
+		t.Fatalf("parsed only %d variables from .env.example; the parser or the file is broken", len(env))
+	}
+
+	// No value may carry a comment: systemd would pass it to the app. This is
+	// checked for every line, including the ones Load does not read with the
+	// defaults (the OIDC block is skipped entirely while OIDC_ENABLED=false).
+	for k, v := range env {
+		if strings.Contains(v, "#") {
+			t.Errorf("%s=%q: systemd passes everything after = to the app, comment included; "+
+				"put the comment on its own line", k, v)
+		}
+	}
+
+	// The two placeholders are rejected on purpose (TestEnvExampleSecretsAreRejected);
+	// an operator replaces them, so the test does too. Everything else is the
+	// file as shipped.
+	for k, v := range required() {
+		if k != "DATABASE_URL" {
+			env[k] = v
+		}
+	}
+	cfg, err := Load(lookupMap(env))
+	if err != nil {
+		t.Fatalf(".env.example with real secrets does not load the way systemd reads it:\n%v", err)
+	}
+	if cfg.LogLevel != slog.LevelInfo || cfg.DefaultCheckInterval != 60*time.Second || cfg.DefaultLocale != "en" {
+		t.Errorf("values did not survive: LogLevel=%v DefaultCheckInterval=%v DefaultLocale=%q",
+			cfg.LogLevel, cfg.DefaultCheckInterval, cfg.DefaultLocale)
+	}
+
+	// The same file with SSO switched on must load too, so the OIDC block's
+	// values are exercised rather than skipped.
+	env["OIDC_ENABLED"] = "true"
+	env["OIDC_ISSUER"] = "https://idp.example.test/realms/statwarden"
+	env["OIDC_CLIENT_ID"] = "statwarden"
+	env["OIDC_CLIENT_SECRET"] = "client-secret-for-tests"
+	cfg, err = Load(lookupMap(env))
+	if err != nil {
+		t.Fatalf(".env.example with OIDC enabled does not load: %v", err)
+	}
+	if cfg.OIDC.ProviderID != "sso" || cfg.OIDC.DefaultRole != "viewer" {
+		t.Errorf("OIDC block mangled: provider %q, role %q", cfg.OIDC.ProviderID, cfg.OIDC.DefaultRole)
+	}
+}
+
 // envExampleValue extracts an uncommented KEY=value line from a dotenv file.
 func envExampleValue(content, key string) (string, bool) {
 	for line := range strings.SplitSeq(content, "\n") {
