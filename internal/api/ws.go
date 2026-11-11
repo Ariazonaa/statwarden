@@ -20,7 +20,11 @@ type WSHub interface {
 	// auth is nil for an anonymous connection. A non-nil auth both marks the
 	// connection as authenticated and lets the hub re-prove that session for as
 	// long as the socket stays open.
-	ServeWS(w http.ResponseWriter, r *http.Request, auth func() bool)
+	//
+	// peer is the resolved client address, which keys the hub's cap on
+	// anonymous connections. canSeePage answers whether an anonymous client may
+	// follow a status page; see statusPageVisibleTo.
+	ServeWS(w http.ResponseWriter, r *http.Request, peer string, auth func() bool, canSeePage func(slug string) bool)
 }
 
 // wsAuthCheckTimeout bounds one background session re-check for an open socket.
@@ -59,7 +63,41 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	s.hub.ServeWS(w, r, revalidate)
+	s.hub.ServeWS(w, r, clientIP(r), revalidate, s.statusPageVisibleTo(r))
+}
+
+// statusPageVisibleTo returns the check the hub runs on every anonymous
+// status-page subscribe: the page must exist and be published, and a
+// password-protected one must have been unlocked by this browser.
+//
+// Any well-formed slug used to be accepted. The pokes on the topic carry no
+// content, but their timing and event type are still news about a draft, or
+// about a page whose password the subscriber does not know.
+//
+// The unlock is proven by the per-page cookie setPageUnlockCookie scopes to
+// /ws; the main unlock cookie is scoped to the public API path and never
+// reaches this handshake. The cookies are read once, here: the socket outlives
+// the request, and the check runs later with a background context.
+func (s *server) statusPageVisibleTo(r *http.Request) func(slug string) bool {
+	unlocked := map[string]string{}
+	for _, c := range r.Cookies() {
+		if slug, ok := strings.CutPrefix(c.Name, pageUnlockWSCookiePrefix); ok {
+			unlocked[slug] = c.Value
+		}
+	}
+	return func(slug string) bool {
+		ctx, cancel := context.WithTimeout(context.Background(), wsAuthCheckTimeout)
+		defer cancel()
+		p, err := s.store.GetStatusPageBySlug(ctx, slug)
+		if err != nil || !p.Published {
+			return false
+		}
+		if p.PasswordHash == "" {
+			return true
+		}
+		token, ok := unlocked[slug]
+		return ok && validPageUnlock(p, token, s.now())
+	}
 }
 
 // sessionStillValid re-resolves a session token WITHOUT the sliding-expiry

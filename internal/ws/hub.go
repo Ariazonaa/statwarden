@@ -2,9 +2,9 @@
 // to topics (monitor:{id}, dashboard:all, status-page:{slug}); the hub is
 // wired to the monitor engine's event stream and broadcasts heartbeats and
 // state changes to the subscribers of the relevant topics. Session-cookie auth
-// is applied at upgrade: unauthenticated connections may only subscribe to
-// public status-page topics. Slow clients are dropped rather than blocking the
-// hub.
+// is applied at upgrade: unauthenticated connections may only subscribe to the
+// status-page topics of pages the caller says they could open, and are capped
+// per client address. Slow clients are dropped rather than blocking the hub.
 package ws
 
 import (
@@ -39,6 +39,18 @@ const (
 	// 64 is far above what the SPA holds (dashboard:all plus a handful of
 	// monitor:/status-page: topics for the mounted views).
 	maxSubscriptions = 64
+
+	// defaultMaxAnonPerPeer and defaultMaxAnon cap ANONYMOUS connections, per
+	// client address and in total. /ws is outside every HTTP rate limiter and
+	// each socket holds goroutines and buffers, so one address could otherwise
+	// open connections until the process ran out of memory. Signed-in sockets
+	// are not counted: they are bounded by the sessions behind them.
+	//
+	// The per-address cap is generous on purpose. Visitors of a public status
+	// page are anonymous, and during an outage a whole office behind one NAT
+	// address may have the page open at the same time.
+	defaultMaxAnonPerPeer = 256
+	defaultMaxAnon        = 10000
 )
 
 // Message is the JSON envelope exchanged in both directions.
@@ -62,10 +74,18 @@ type Hub struct {
 	// revocation path without waiting out the production interval.
 	authRecheck time.Duration
 
+	// maxAnonPerPeer and maxAnon are fields for the same reason authRecheck is:
+	// a test can exercise the ceiling without opening hundreds of sockets.
+	maxAnonPerPeer int
+	maxAnon        int
+
 	mu           sync.RWMutex
 	clients      map[*client]struct{}
 	topics       map[string]map[*client]struct{}
 	pageResolver func(monitorID int64) []string
+	// anonByPeer and anonTotal count open anonymous connections; guarded by mu.
+	anonByPeer map[string]int
+	anonTotal  int
 }
 
 // NewHub returns a ready hub. Wire PublishStateChange / PublishHeartbeat to the
@@ -75,10 +95,13 @@ func NewHub(logger *slog.Logger) *Hub {
 		logger = slog.Default()
 	}
 	return &Hub{
-		log:         logger,
-		authRecheck: authRecheckPeriod,
-		clients:     map[*client]struct{}{},
-		topics:      map[string]map[*client]struct{}{},
+		log:            logger,
+		authRecheck:    authRecheckPeriod,
+		maxAnonPerPeer: defaultMaxAnonPerPeer,
+		maxAnon:        defaultMaxAnon,
+		clients:        map[*client]struct{}{},
+		topics:         map[string]map[*client]struct{}{},
+		anonByPeer:     map[string]int{},
 	}
 }
 
@@ -117,6 +140,34 @@ func validTopic(topic string) bool {
 	}
 }
 
+// reserveAnon claims an anonymous connection slot for peer, reporting false
+// when the address or the hub is at its ceiling.
+func (h *Hub) reserveAnon(peer string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.anonTotal >= h.maxAnon || h.anonByPeer[peer] >= h.maxAnonPerPeer {
+		return false
+	}
+	h.anonTotal++
+	h.anonByPeer[peer]++
+	return true
+}
+
+// releaseAnonLocked returns a slot claimed by reserveAnon. Callers hold h.mu.
+func (h *Hub) releaseAnonLocked(peer string) {
+	h.anonTotal--
+	if h.anonByPeer[peer]--; h.anonByPeer[peer] <= 0 {
+		delete(h.anonByPeer, peer)
+	}
+}
+
+// releaseAnon is releaseAnonLocked for a connection that never registered.
+func (h *Hub) releaseAnon(peer string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.releaseAnonLocked(peer)
+}
+
 // register adds c to the hub.
 func (h *Hub) register(c *client) {
 	h.mu.Lock()
@@ -132,6 +183,9 @@ func (h *Hub) unregister(c *client) {
 		return
 	}
 	delete(h.clients, c)
+	if c.anonSlot {
+		h.releaseAnonLocked(c.peer)
+	}
 	for topic := range c.subs {
 		if set := h.topics[topic]; set != nil {
 			delete(set, c)
@@ -152,8 +206,20 @@ func (h *Hub) subscribe(c *client, topic string) string {
 	if !validTopic(topic) {
 		return "unknown topic"
 	}
-	if !c.authenticated.Load() && !isPublicTopic(topic) {
-		return "authentication required for this topic"
+	if !c.authenticated.Load() {
+		if !isPublicTopic(topic) {
+			return "authentication required for this topic"
+		}
+		// A well-formed slug is not a visible page. Without this an anonymous
+		// socket could follow a draft or a password-protected page and learn
+		// when, and what kind of, change happened there. The check reaches the
+		// store, so it runs before h.mu is taken; no check at all fails closed.
+		// Missing, draft and protected answer alike, so the refusal does not
+		// tell a stranger which slugs exist.
+		slug := strings.TrimPrefix(topic, prefixStatusPage)
+		if c.canSeePage == nil || !c.canSeePage(slug) {
+			return "status page not available"
+		}
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()

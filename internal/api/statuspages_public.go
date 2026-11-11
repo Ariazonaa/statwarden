@@ -66,6 +66,14 @@ const (
 
 	// publicStatusPrefix is the URL prefix the unlock cookie is scoped to.
 	publicStatusPrefix = "/api/v1/public/status"
+
+	// pageUnlockWSCookiePrefix names the second unlock cookie, one per page
+	// (prefix + slug), scoped to /ws so the live-update handshake can prove the
+	// unlock too. It is named per page rather than path-scoped per page because
+	// every page shares the one /ws path; the slug charset is valid in a cookie
+	// name as it stands.
+	pageUnlockWSCookiePrefix = "statwarden_page_unlock_ws_"
+	wsPath                   = "/ws"
 )
 
 // Overall status-page banner states.
@@ -303,6 +311,13 @@ func (s *server) setPageUnlockCookie(w http.ResponseWriter, r *http.Request, p S
 		c.Partitioned = true
 	}
 	http.SetCookie(w, c)
+	// The same token again for the WebSocket handshake, which only accepts an
+	// anonymous status-page subscription for a protected page on proof of the
+	// unlock (see statusPageVisibleTo).
+	wsc := *c
+	wsc.Name = pageUnlockWSCookiePrefix + p.Slug
+	wsc.Path = wsPath
+	http.SetCookie(w, &wsc)
 }
 
 // pageUnlockToken derives a stateless unlock token: the expiry (unix seconds)
