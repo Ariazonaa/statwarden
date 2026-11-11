@@ -239,7 +239,7 @@ func (s *server) setPageUnlockCookie(w http.ResponseWriter, r *http.Request, p S
 		path += "/" + p.Slug
 	}
 	exp := s.now().Add(pageUnlockTTL).Unix()
-	http.SetCookie(w, &http.Cookie{
+	c := &http.Cookie{
 		Name:     pageUnlockCookie,
 		Value:    pageUnlockToken(p, exp),
 		Path:     path,
@@ -247,7 +247,24 @@ func (s *server) setPageUnlockCookie(w http.ResponseWriter, r *http.Request, p S
 		Secure:   s.secureCookies,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(pageUnlockTTL.Seconds()),
-	})
+	}
+	// Status pages are meant to be embedded on other sites, and inside such a
+	// frame every request is cross-site: a Lax cookie is neither stored nor sent
+	// there, so an embedded protected page asked for the password on every
+	// request. SameSite=None fixes that and is only accepted with Secure, so it
+	// is used only when secure cookies are on; plain-HTTP deployments keep Lax,
+	// which still works on the page itself.
+	//
+	// Partitioned (CHIPS) keys the cookie to the embedding site. A visitor who
+	// unlocked the page inside one site's frame does not carry that unlock into
+	// a frame on any other site, which is the isolation Lax gave by refusing the
+	// cookie altogether. The cookie gates a read-only GET and the token is bound
+	// to the page and its password hash, so None adds no CSRF surface.
+	if s.secureCookies {
+		c.SameSite = http.SameSiteNoneMode
+		c.Partitioned = true
+	}
+	http.SetCookie(w, c)
 }
 
 // pageUnlockToken derives a stateless unlock token: the expiry (unix seconds)
