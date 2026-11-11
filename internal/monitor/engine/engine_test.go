@@ -1808,3 +1808,29 @@ func TestHeartbeatTextIsStorable(t *testing.T) {
 		t.Fatalf("extra %s lost the number's original spelling", hb.Extra)
 	}
 }
+
+// TestCertInfoIsDroppedOnceTheMonitorNoLongerServesTLS: cert_info was only ever
+// upserted, so a monitor switched from https:// to http:// (or to a type with
+// no TLS at all) kept its last certificate forever, and the expiry sweeper
+// went on warning about a certificate the monitor no longer checks. A check
+// that reached its target and saw no certificate removes it; a failed one does
+// not, because a refused connection proves nothing about TLS.
+func TestCertInfoIsDroppedOnceTheMonitorNoLongerServesTLS(t *testing.T) {
+	reg := registry.New()
+	chk := &scriptChecker{typ: "fake", queue: []domain.CheckResult{down()}, fallback: up()}
+	reg.Register(chk)
+
+	e, store, _ := newEngine(t, engine.Options{Registry: reg})
+	_ = store.SaveCertInfo(context.Background(), 1, domain.CertInfo{Subject: "CN=example.test"})
+	if err := e.Upsert(testMonitor(1, "fake")); err != nil {
+		t.Fatal(err)
+	}
+	checkNowAndWait(t, e, store, 1, 1) // DOWN, no certificate
+	if _, ok := store.Cert(1); !ok {
+		t.Fatal("a failed check without a certificate removed the stored one")
+	}
+	checkNowAndWait(t, e, store, 1, 2) // UP, no certificate
+	if c, ok := store.Cert(1); ok {
+		t.Fatalf("certificate %+v still stored after a successful check without TLS", c)
+	}
+}

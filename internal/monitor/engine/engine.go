@@ -255,6 +255,11 @@ type job struct {
 	// long over was adopted as a running outage. Set, it makes the next check
 	// write the status whether or not it transitions.
 	statusUnsaved bool
+	// certAbsent records that this monitor's cert_info row is known not to
+	// exist, so a monitor without TLS does not issue a DELETE on every check.
+	// It starts false — unknown — so the first qualifying check clears a row
+	// left over from before a restart.
+	certAbsent bool
 }
 
 // New builds an Engine from opts. It does not schedule anything yet.
@@ -787,11 +792,15 @@ func (e *Engine) runCheck(j *job, m domain.Monitor, prev domain.MonitorStatus, r
 	e.mu.Lock()
 	current := !j.removed && j.gen == gen
 	writeStatus := transitioned || j.statusUnsaved
+	// Only a check that reached its target proves it serves no certificate;
+	// a refused connection says nothing either way.
+	dropCert := res.Cert == nil && res.Status == domain.StatusUp && !j.certAbsent
 	e.mu.Unlock()
 	if current {
-		saved := e.persist(m, res, next, newRetries, transitioned, writeStatus, now)
+		saved, certGone := e.persist(m, res, next, newRetries, transitioned, writeStatus, dropCert, now)
 		e.mu.Lock()
 		j.statusUnsaved = !saved
+		j.certAbsent = certGone || (j.certAbsent && res.Cert == nil)
 		e.mu.Unlock()
 		// A flap ends before this check's own transition is looked at: a change
 		// arriving after a whole quiet window is an ordinary alert again, not one
@@ -965,9 +974,10 @@ func (e *Engine) timeoutFor(m domain.Monitor, checker registry.Checker) time.Dur
 }
 
 // persist writes the heartbeat (always), the monitor status (when writeStatus)
-// and observed certificate data. Store failures are logged, never fatal; the
-// result reports whether the status column now holds next.
-func (e *Engine) persist(m domain.Monitor, res domain.CheckResult, next domain.MonitorStatus, retriesNow int, transitioned, writeStatus bool, now time.Time) (statusSaved bool) {
+// and observed certificate data, and forgets a stored certificate when
+// dropCert. Store failures are logged, never fatal; the results report whether
+// the status column now holds next and whether the certificate was removed.
+func (e *Engine) persist(m domain.Monitor, res domain.CheckResult, next domain.MonitorStatus, retriesNow int, transitioned, writeStatus, dropCert bool, now time.Time) (statusSaved, certGone bool) {
 	ctx, cancel := context.WithTimeout(e.baseCtx, persistTimeout)
 	defer cancel()
 
@@ -1006,12 +1016,22 @@ func (e *Engine) persist(m domain.Monitor, res domain.CheckResult, next domain.M
 			statusSaved = false
 		}
 	}
-	if res.Cert != nil {
+	switch {
+	case res.Cert != nil:
 		if err := e.store.SaveCertInfo(ctx, m.ID, *res.Cert); err != nil {
 			e.log.Error("engine: save cert info", "monitor_id", m.ID, "error", err)
 		}
+	case dropCert:
+		// cert_info used to be upsert-only: a monitor moved from https:// to
+		// http://, or to a type without TLS, kept its last certificate, and
+		// the expiry sweeper warned about it indefinitely.
+		if err := e.store.DeleteCertInfo(ctx, m.ID); err != nil {
+			e.log.Error("engine: delete cert info", "monitor_id", m.ID, "error", err)
+		} else {
+			certGone = true
+		}
 	}
-	return statusSaved
+	return statusSaved, certGone
 }
 
 // persistStatus writes just the status column (used by Pause/Resume).

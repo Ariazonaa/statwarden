@@ -20,6 +20,9 @@ type Store interface {
 	UpdateMonitorStatus(ctx context.Context, monitorID int64, status domain.MonitorStatus) error
 	// SaveCertInfo upserts the certificate observed by a TLS-capable check.
 	SaveCertInfo(ctx context.Context, monitorID int64, info domain.CertInfo) error
+	// DeleteCertInfo forgets a monitor's certificate once it no longer serves
+	// TLS; deleting one that does not exist is not an error.
+	DeleteCertInfo(ctx context.Context, monitorID int64) error
 }
 
 // MemStore is an in-memory Store for tests and DEV_MODE without a database.
@@ -75,6 +78,14 @@ func (s *MemStore) SaveCertInfo(_ context.Context, monitorID int64, info domain.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.certs[monitorID] = info
+	return nil
+}
+
+// DeleteCertInfo implements Store.
+func (s *MemStore) DeleteCertInfo(_ context.Context, monitorID int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.certs, monitorID)
 	return nil
 }
 

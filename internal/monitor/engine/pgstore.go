@@ -155,6 +155,13 @@ func (s *PgStore) SaveCertInfo(ctx context.Context, monitorID int64, info domain
 	})
 }
 
+// DeleteCertInfo implements Store. Hand-written: the generated queries have no
+// delete for this table.
+func (s *PgStore) DeleteCertInfo(ctx context.Context, monitorID int64) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM cert_info WHERE monitor_id = $1`, monitorID)
+	return err
+}
+
 // monitorFromRow converts a monitors row into the domain type, widening the
 // integer second/minute columns to durations.
 func monitorFromRow(r sqlcgen.Monitor) domain.Monitor {
