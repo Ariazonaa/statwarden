@@ -11,9 +11,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql" // registers the "mysql" database/sql driver
+	"github.com/go-sql-driver/mysql" // also registers the "mysql" database/sql driver
 
 	"github.com/Ariazonaa/statwarden/internal/domain"
 	"github.com/Ariazonaa/statwarden/internal/monitor/registry"
@@ -151,9 +152,25 @@ func liveMySQL(ctx context.Context, c Config) (probeResult, error) {
 		if errors.Is(err, sql.ErrNoRows) {
 			return probeResult{}, nil
 		}
-		return probeResult{}, err
+		return probeResult{}, queryError(err)
 	}
 	return probeResult{value: stringify(value), hasValue: true}, nil
+}
+
+// queryError reports a failed assertion query without the server's text,
+// which quotes the data it choked on — see the same function in postgrescheck.
+// The error number and SQLSTATE identify the failure; network and context
+// errors carry no row data and stay readable.
+func queryError(err error) error {
+	var myErr *mysql.MySQLError
+	if errors.As(err, &myErr) {
+		return fmt.Errorf("assertion query failed (error %d, SQLSTATE %s)", myErr.Number, string(myErr.SQLState[:]))
+	}
+	var netErr net.Error
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.As(err, &netErr) {
+		return fmt.Errorf("assertion query failed: %w", err)
+	}
+	return errors.New("assertion query failed")
 }
 
 // stringify renders a scanned column value as a string for comparison. The

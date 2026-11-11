@@ -149,6 +149,42 @@ func TestAFailedAssertionDoesNotEchoTheObservedValue(t *testing.T) {
 	}
 }
 
+// A failing assertion query must not put the server's error text into the
+// message either: PostgreSQL quotes the offending value — a cast that fails
+// names the row's content — and the message is readable by every user. The
+// SQLSTATE says what kind of failure it was without saying what was in the row.
+func TestAFailedAssertionQueryDoesNotEchoTheServerError(t *testing.T) {
+	const secret = "s3cr3t-row-from-an-internal-database"
+	old := cleanupTimeout
+	cleanupTimeout = 200 * time.Millisecond // the fake never answers ROLLBACK
+	t.Cleanup(func() { cleanupTimeout = old })
+	srv := startFakeServer(t, &pgproto3.ErrorResponse{
+		Severity: "ERROR", Code: "22P02",
+		Message: `invalid input syntax for type integer: "` + secret + `"`,
+		Detail:  "Failing row contains (" + secret + ").",
+	})
+
+	var ch Checker
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := ch.Check(ctx, mustCfg(t, Config{
+		Host: srv.host, Port: srv.port, User: "monitor", Database: "app",
+		SSLMode: SSLModeDisable, Query: "SELECT secret::int FROM t",
+	}))
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if res.Status != domain.StatusDown {
+		t.Fatalf("status = %s (%s), want down", res.Status, res.Message)
+	}
+	if strings.Contains(res.Message, secret) {
+		t.Errorf("the server's error text reached the heartbeat message: %q", res.Message)
+	}
+	if !strings.Contains(res.Message, "22P02") {
+		t.Errorf("message %q does not carry the SQLSTATE", res.Message)
+	}
+}
+
 // The rollback after the assertion query, and the close, ran on
 // context.Background(): a server that stopped answering at that point held the
 // check forever, and the engine never schedules a monitor whose check has not
