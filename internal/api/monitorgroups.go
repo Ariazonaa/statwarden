@@ -62,6 +62,8 @@ func (s *server) handleUpdateMonitorGroup(w http.ResponseWriter, r *http.Request
 	if storeError(w, err) {
 		return
 	}
+	p := principalFrom(r)
+	s.audit(r.Context(), &p.userID, "monitor_group.update", "monitor_group", &g.ID, clientIP(r), map[string]any{"name": g.Name})
 	writeJSON(w, http.StatusOK, g)
 }
 

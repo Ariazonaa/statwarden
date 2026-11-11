@@ -179,3 +179,27 @@ func TestMonitorListFiltersByGroup(t *testing.T) {
 		t.Fatalf("unfiled filter = %v, want [%d]", got, unfiled.ID)
 	}
 }
+
+// Renaming or reordering a folder is a configuration change like creating or
+// deleting one, and was the only one of the four missing from the audit log.
+func TestMonitorGroupUpdateIsAudited(t *testing.T) {
+	h := newHarness(t)
+	admin := h.setupAdmin()
+	rec := h.requestWith(http.MethodPost, "/api/v1/monitor-groups", monitorGroupRequest{Name: "Old"}, admin)
+	var g MonitorGroup
+	mustJSON(t, rec, &g)
+	rec = h.requestWith(http.MethodPut, fmt.Sprintf("/api/v1/monitor-groups/%d", g.ID), monitorGroupRequest{Name: "New", SortOrder: 2}, admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update = %d, body %s", rec.Code, rec.Body.String())
+	}
+	entries, _, err := h.store.ListAudit(t.Context(), Page{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Action == "monitor_group.update" && e.EntityID != nil && *e.EntityID == g.ID {
+			return
+		}
+	}
+	t.Fatal("no monitor_group.update audit entry was written")
+}
