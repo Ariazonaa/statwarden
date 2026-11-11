@@ -453,6 +453,22 @@ export const en = {
 	'monitorDetail.badgeUptimeLabel': 'Uptime badge',
 	'monitorDetail.badgeUrl': 'URL',
 	'monitorDetail.badgeMarkdown': 'Markdown',
+	'monitorDetail.pushTitle': 'Push URL',
+	'monitorDetail.pushSub': 'The job you monitor calls this URL on its schedule.',
+	'monitorDetail.pushUrl': 'Push URL',
+	'monitorDetail.pushExample': 'Example (cron, script)',
+	'monitorDetail.pushCopyExample': 'Copy example',
+	'monitorDetail.pushShownOnce':
+		'Copy it now: the token is stored only as a hash, so this URL is shown this once.',
+	'monitorDetail.pushHidden':
+		'The URL is shown only when it is created, because the server keeps just a hash of its token. Generate a new one to see it; the old URL then stops working.',
+	'monitorDetail.pushPaused': 'Resume the monitor to generate a push URL.',
+	'monitorDetail.pushRegenerate': 'Generate new URL',
+	'monitorDetail.pushRegenerateTitle': 'Generate a new push URL?',
+	'monitorDetail.pushRegenerateBody':
+		'The current URL stops working immediately. Update every job that calls it.',
+	'monitorDetail.pushRegenerated': 'New push URL generated',
+	'monitorDetail.pushRegenerateError': 'Could not generate a push URL',
 	'monitorDetail.badgeCopyUrl': 'Copy URL',
 	'monitorDetail.badgeCopyMarkdown': 'Copy Markdown',
 	'monitorDetail.badgeCopied': 'Copied to clipboard',

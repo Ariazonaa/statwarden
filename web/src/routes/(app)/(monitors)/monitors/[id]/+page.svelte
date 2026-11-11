@@ -20,6 +20,7 @@
 	import RelativeTime from '$lib/components/RelativeTime.svelte';
 	import { humanDuration } from '$lib/util/time';
 	import { renderMarkdown } from '$lib/util/markdown';
+	import { pushUrl, pushCurl, takePushToken } from '$lib/util/push';
 	import { t, formatDateTime, formatUptime } from '$lib/i18n';
 	import {
 		EmptyState,
@@ -66,6 +67,30 @@
 	// stable token for a monitor that already has one). `undefined` = not created
 	// yet in this view; `revoke` clears it back.
 	let badge = $state<MonitorBadge | undefined>(undefined);
+
+	// Push monitors: the heartbeat URL carries a token the server stores only as
+	// a hash, so it is visible right after creation (handed over by the form)
+	// or after minting a new one, never by reading the monitor.
+	let pushTokenShown = $state<string | undefined>(takePushToken(page.params.id ?? ''));
+	let pushBusy = $state(false);
+	let confirmRegenerate = $state(false);
+	const pushUrlShown = $derived(
+		pushTokenShown ? pushUrl(pushTokenShown, window.location.origin) : undefined
+	);
+
+	async function regeneratePush() {
+		pushBusy = true;
+		try {
+			const r = await api.regeneratePushToken(id);
+			pushTokenShown = r.pushToken;
+			confirmRegenerate = false;
+			toast.success(t('monitorDetail.pushRegenerated'));
+		} catch (err) {
+			toast.error(problemMessage(err) || t('monitorDetail.pushRegenerateError'));
+		} finally {
+			pushBusy = false;
+		}
+	}
 	let badgeBusy = $state(false);
 	let confirmRevoke = $state(false);
 
@@ -392,6 +417,48 @@
 		</p>
 	</GlassCard>
 
+	{#if session.canEdit && monitor.type === 'push'}
+		<GlassCard title={t('monitorDetail.pushTitle')} subtitle={t('monitorDetail.pushSub')}>
+			{#snippet actions()}
+				<PillButton
+					variant={pushUrlShown ? 'secondary' : 'primary'}
+					size="sm"
+					disabled={pushBusy || !monitor?.active}
+					onclick={() => (confirmRegenerate = true)}
+				>
+					{t('monitorDetail.pushRegenerate')}
+				</PillButton>
+			{/snippet}
+			{#if pushUrlShown}
+				<div class="badge-block">
+					<p class="push-once">{t('monitorDetail.pushShownOnce')}</p>
+					<div class="badge-field">
+						<span class="badge-key">{t('monitorDetail.pushUrl')}</span>
+						<code class="badge-val">{pushUrlShown}</code>
+						<PillButton variant="secondary" size="sm" onclick={() => copyText(pushUrlShown)}>
+							{t('monitorDetail.badgeCopyUrl')}
+						</PillButton>
+					</div>
+					<div class="badge-field">
+						<span class="badge-key">{t('monitorDetail.pushExample')}</span>
+						<code class="badge-val">{pushCurl(pushUrlShown)}</code>
+						<PillButton
+							variant="secondary"
+							size="sm"
+							onclick={() => copyText(pushCurl(pushUrlShown))}
+						>
+							{t('monitorDetail.pushCopyExample')}
+						</PillButton>
+					</div>
+				</div>
+			{:else}
+				<p class="push-once">
+					{monitor.active ? t('monitorDetail.pushHidden') : t('monitorDetail.pushPaused')}
+				</p>
+			{/if}
+		</GlassCard>
+	{/if}
+
 	<GlassCard class="kstats">
 		<dl class="stats">
 			<div class="kpi">
@@ -621,6 +688,18 @@
 	{/snippet}
 </Modal>
 
+<Modal bind:open={confirmRegenerate} title={t('monitorDetail.pushRegenerateTitle')}>
+	<p style="margin:0">{t('monitorDetail.pushRegenerateBody')}</p>
+	{#snippet footer()}
+		<PillButton variant="ghost" onclick={() => (confirmRegenerate = false)}
+			>{t('common.cancel')}</PillButton
+		>
+		<PillButton variant="primary" disabled={pushBusy} onclick={regeneratePush}
+			>{t('monitorDetail.pushRegenerate')}</PillButton
+		>
+	{/snippet}
+</Modal>
+
 <Modal bind:open={confirmRevoke} title={t('monitorDetail.badgeRevokeTitle')}>
 	<p style="margin:0">{t('monitorDetail.badgeRevokeBody')}</p>
 	{#snippet footer()}
@@ -634,6 +713,11 @@
 </Modal>
 
 <style>
+	.push-once {
+		margin: 0;
+		font-size: var(--text-footnote);
+		color: var(--color-text-secondary);
+	}
 	.loaderr {
 		border-radius: var(--radius-squircle-lg);
 		padding: var(--space-6);

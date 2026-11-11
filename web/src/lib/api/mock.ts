@@ -221,6 +221,16 @@ function targetUrl(config: Record<string, unknown>): string | undefined {
 		: config.host;
 }
 
+// The mock's push tokens, by monitor. Kept outside the monitor records so a
+// read never returns one, as on the server, which stores only a hash.
+const pushTokens = new Map<string, string>();
+function mintPushToken(mid: string): string {
+	const bytes = crypto.getRandomValues(new Uint8Array(16));
+	const tok = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+	pushTokens.set(mid, tok);
+	return tok;
+}
+
 function mkMonitor(
 	name: string,
 	type: string,
@@ -1279,7 +1289,11 @@ export const mockApi = {
 			url: targetUrl(config)
 		});
 		monitors.unshift(m);
-		return clone(m);
+		// Like the server: a push monitor's token comes back once, in the create
+		// response, and is never part of a stored or listed monitor.
+		const created = clone(m);
+		if (m.type === 'push') created.pushToken = mintPushToken(m.id);
+		return created;
 	},
 	async updateMonitor(mid: string, input: Partial<Monitor>) {
 		await delay(180);
@@ -1389,6 +1403,20 @@ export const mockApi = {
 	// Embeddable SVG badge lifecycle. Idempotent create, like EnsureBadgeToken:
 	// re-creating returns the same token so the URLs stay stable. The base is the
 	// settings row's base URL, standing in for the server's PUBLIC_BASE_URL.
+	async regeneratePushToken(mid: string): Promise<{ pushToken: string; pushUrl: string }> {
+		await delay(150);
+		const m = find(mid);
+		if (m.type !== 'push') {
+			throw {
+				title: 'Conflict',
+				status: 409,
+				detail: 'push tokens are only available for push monitors'
+			};
+		}
+		const pushToken = mintPushToken(mid);
+		const base = settings.baseUrl ? settings.baseUrl.replace(/\/+$/, '') : '';
+		return { pushToken, pushUrl: `${base}/api/v1/push/${pushToken}` };
+	},
 	async createMonitorBadge(mid: string): Promise<MonitorBadge> {
 		await delay(150);
 		find(mid);

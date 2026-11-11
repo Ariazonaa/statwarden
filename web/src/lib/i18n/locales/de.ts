@@ -458,6 +458,22 @@ export const de: Messages = {
 	'monitorDetail.badgeUptimeLabel': 'Verfügbarkeits-Badge',
 	'monitorDetail.badgeUrl': 'URL',
 	'monitorDetail.badgeMarkdown': 'Markdown',
+	'monitorDetail.pushTitle': 'Push-URL',
+	'monitorDetail.pushSub': 'Der überwachte Job ruft diese URL in seinem Rhythmus auf.',
+	'monitorDetail.pushUrl': 'Push-URL',
+	'monitorDetail.pushExample': 'Beispiel (Cron, Skript)',
+	'monitorDetail.pushCopyExample': 'Beispiel kopieren',
+	'monitorDetail.pushShownOnce':
+		'Jetzt kopieren: Der Token wird nur als Hash gespeichert, diese URL ist nur dieses eine Mal sichtbar.',
+	'monitorDetail.pushHidden':
+		'Die URL wird nur beim Erzeugen angezeigt, weil der Server vom Token nur einen Hash speichert. Erzeuge eine neue, um sie zu sehen; die alte URL funktioniert danach nicht mehr.',
+	'monitorDetail.pushPaused': 'Setze den Monitor fort, um eine Push-URL zu erzeugen.',
+	'monitorDetail.pushRegenerate': 'Neue URL erzeugen',
+	'monitorDetail.pushRegenerateTitle': 'Neue Push-URL erzeugen?',
+	'monitorDetail.pushRegenerateBody':
+		'Die bisherige URL funktioniert sofort nicht mehr. Passe alle Jobs an, die sie aufrufen.',
+	'monitorDetail.pushRegenerated': 'Neue Push-URL erzeugt',
+	'monitorDetail.pushRegenerateError': 'Push-URL konnte nicht erzeugt werden',
 	'monitorDetail.badgeCopyUrl': 'URL kopieren',
 	'monitorDetail.badgeCopyMarkdown': 'Markdown kopieren',
 	'monitorDetail.badgeCopied': 'In die Zwischenablage kopiert',
