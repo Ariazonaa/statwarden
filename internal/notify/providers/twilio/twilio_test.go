@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+	"unicode/utf8"
 
 	"github.com/Ariazonaa/statwarden/internal/domain"
 	"github.com/Ariazonaa/statwarden/internal/notify/registry"
@@ -99,6 +101,110 @@ func TestSend(t *testing.T) {
 	sort.Strings(gotTos)
 	if len(gotTos) != 2 || gotTos[0] != "+15550002222" || gotTos[1] != "+15550003333" {
 		t.Fatalf("recipients = %v, want both numbers", gotTos)
+	}
+}
+
+// recipientServer answers 400 for the numbers in bad and 201 for everyone
+// else, and counts the messages each number was sent.
+func recipientServer(t *testing.T, bad ...string) (*httptest.Server, func() map[string]int) {
+	t.Helper()
+	var mu sync.Mutex
+	got := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		vals, _ := url.ParseQuery(string(body))
+		to := vals.Get("To")
+		for _, b := range bad {
+			if to == b {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"message":"invalid number","code":21211}`))
+				return
+			}
+		}
+		mu.Lock()
+		got[to]++
+		mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() map[string]int {
+		mu.Lock()
+		defer mu.Unlock()
+		out := map[string]int{}
+		for k, v := range got {
+			out[k] = v
+		}
+		return out
+	}
+}
+
+// One bad number must not cost every recipient after it the alert.
+//
+// The loop returned on the first failure, so a typo in the first entry of the
+// list silenced the whole on-call rota — while the channel merely showed as
+// "failed", which looks like a provider problem rather than one bad entry.
+func TestABadRecipientDoesNotStopTheOthers(t *testing.T) {
+	srv, sent := recipientServer(t, "+15550000001")
+	n := New()
+	n.baseURL = srv.URL
+	cfg := json.RawMessage(`{"account_sid":"AC1","auth_token":"t","from":"+1",` +
+		`"to":["+15550000001","+15550000002","+15550000003"]}`)
+	err := n.Send(t.Context(), cfg, domain.NotificationEvent{Kind: domain.EventKindDown, MonitorID: 1, Title: "API is DOWN"})
+	if err == nil {
+		t.Fatal("a failed recipient was reported as a successful delivery")
+	}
+	if !strings.Contains(err.Error(), "+15550000001") || !strings.Contains(err.Error(), "invalid number") {
+		t.Errorf("error does not say which recipient failed and why: %v", err)
+	}
+	got := sent()
+	if got["+15550000002"] != 1 || got["+15550000003"] != 1 {
+		t.Fatalf("recipients after the bad one = %v, want each sent once", got)
+	}
+}
+
+// A retry of the same alert must reach only the recipients that missed it.
+//
+// The dispatcher retries a failed Send (and the outbox retries it again later),
+// and every retry used to text the whole list — so one permanently bad number
+// meant everyone else got the same SMS up to a dozen times.
+func TestARetryDoesNotTextTheSameRecipientTwice(t *testing.T) {
+	srv, sent := recipientServer(t, "+15550000001")
+	n := New()
+	n.baseURL = srv.URL
+	cfg := json.RawMessage(`{"account_sid":"AC1","auth_token":"t","from":"+1",` +
+		`"to":["+15550000001","+15550000002"]}`)
+	ev := domain.NotificationEvent{Kind: domain.EventKindDown, MonitorID: 1, Title: "API is DOWN",
+		At: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}
+	for range 3 {
+		if err := n.Send(t.Context(), cfg, ev); err == nil {
+			t.Fatal("the bad recipient was reported as delivered")
+		}
+	}
+	if got := sent()["+15550000002"]; got != 1 {
+		t.Fatalf("the good recipient was texted %d times across retries, want 1", got)
+	}
+
+	// A different alert is new news and does reach them again.
+	ev.Kind, ev.Title = domain.EventKindUp, "API is UP"
+	_ = n.Send(t.Context(), cfg, ev)
+	if got := sent()["+15550000002"]; got != 2 {
+		t.Fatalf("the next alert reached the good recipient %d times in total, want 2", got)
+	}
+}
+
+// Truncation counts characters, not bytes. Cutting at a byte offset split a
+// multi-byte character and sent invalid UTF-8, which the carrier renders as
+// garbage at best.
+func TestLongMessagesAreCutOnACharacterBoundary(t *testing.T) {
+	msg := buildMessage(domain.NotificationEvent{Title: strings.Repeat("ü", maxSMSLen+10)})
+	if !utf8.ValidString(msg) {
+		t.Fatal("truncated message is not valid UTF-8")
+	}
+	if got := utf8.RuneCountInString(msg); got != maxSMSLen {
+		t.Fatalf("truncated message is %d characters, want %d", got, maxSMSLen)
+	}
+	if !strings.HasSuffix(msg, "…") {
+		t.Fatal("truncation is not marked")
 	}
 }
 
