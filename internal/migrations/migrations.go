@@ -14,6 +14,8 @@ import (
 	pgxmigrate "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver "pgx" for the migrate database driver
+
+	"github.com/Ariazonaa/statwarden/internal/db"
 )
 
 //go:embed *.sql
@@ -28,7 +30,10 @@ func Run(databaseURL string) (uint, error) {
 		return 0, fmt.Errorf("load embedded migrations: %w", err)
 	}
 
-	sqlDB, err := sql.Open("pgx", databaseURL)
+	// Stripped of the pool_* settings first: this connection goes through
+	// pgx.ParseConfig, not pgxpool, and would forward them to the server as
+	// runtime parameters it rejects — failing startup over pool tuning.
+	sqlDB, err := sql.Open("pgx", db.PortableConnString(databaseURL))
 	if err != nil {
 		return 0, fmt.Errorf("open database: %w", err)
 	}
