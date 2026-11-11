@@ -1,6 +1,7 @@
 package importexport
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"os"
@@ -61,7 +62,7 @@ func buildKumaDB(t *testing.T) []byte {
 }
 
 func TestMapKumaDB(t *testing.T) {
-	res, err := MapKumaDB(buildKumaDB(t))
+	res, err := MapKumaDB(context.Background(), buildKumaDB(t))
 	if err != nil {
 		t.Fatalf("MapKumaDB: %v", err)
 	}
@@ -127,7 +128,7 @@ func TestMapKumaDB(t *testing.T) {
 }
 
 func TestMapKumaDBRejectsNonKuma(t *testing.T) {
-	if _, err := MapKumaDB([]byte("this is not a database")); err == nil {
+	if _, err := MapKumaDB(context.Background(), []byte("this is not a database")); err == nil {
 		t.Fatal("expected an error for a non-SQLite payload")
 	}
 }
@@ -194,7 +195,7 @@ func buildOldKumaDB(t *testing.T) []byte {
 // "no tags" and a missing `active` silently meant no channels at all — taking every
 // monitor's alert routing with them, with no warning.
 func TestMapKumaDBReadsAnOlderSchema(t *testing.T) {
-	res, err := MapKumaDB(buildOldKumaDB(t))
+	res, err := MapKumaDB(context.Background(), buildOldKumaDB(t))
 	if err != nil {
 		t.Fatalf("MapKumaDB on an older schema: %v", err)
 	}
@@ -255,7 +256,68 @@ func TestMapKumaDBStillRejectsAMonitorTableWithoutTheBasics(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := MapKumaDB(raw); err == nil {
+	if _, err := MapKumaDB(context.Background(), raw); err == nil {
 		t.Fatal("a monitor table with no id/name/type was accepted")
+	}
+}
+
+// kumaDBFrom builds a database from the given statements and returns its bytes.
+func kumaDBFrom(t *testing.T, stmts ...string) []byte {
+	t.Helper()
+	path := t.TempDir() + "/kuma.db"
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			t.Fatalf("seed: %v\n%s", err, s)
+		}
+	}
+	db.Close()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// The upload is an arbitrary SQLite file, and every table the importer reads
+// could be a VIEW over anything — a recursive CTE that never terminates, run
+// by the server on the admin's request. A Uptime-Kuma database has plain
+// tables, so anything else under those names is refused before it is queried,
+// and so are computed columns, which run an expression per row read.
+func TestMapKumaDBRefusesViewsAndComputedColumns(t *testing.T) {
+	cases := map[string][]string{
+		"monitor is a view": {
+			`CREATE TABLE m0 (id INTEGER PRIMARY KEY, name TEXT, type TEXT)`,
+			`CREATE VIEW monitor AS WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c)
+				SELECT x AS id, 'n' AS name, 'http' AS type FROM c`,
+		},
+		"tag is a view": {
+			`CREATE TABLE monitor (id INTEGER PRIMARY KEY, name TEXT, type TEXT)`,
+			`CREATE VIEW tag AS SELECT 1 AS id, 'x' AS name`,
+		},
+		"generated column": {
+			`CREATE TABLE monitor (id INTEGER PRIMARY KEY, name TEXT, type TEXT,
+				url TEXT GENERATED ALWAYS AS (printf('%.*c', 100000000, 'x')) VIRTUAL)`,
+		},
+	}
+	for name, stmts := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := MapKumaDB(context.Background(), kumaDBFrom(t, stmts...)); err == nil {
+				t.Fatal("the database was read")
+			}
+		})
+	}
+}
+
+// The read is bounded by the caller's context, so an upload that is merely
+// slow to read cannot hold a request open indefinitely.
+func TestMapKumaDBHonoursTheContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := MapKumaDB(ctx, buildKumaDB(t)); err == nil {
+		t.Fatal("a cancelled read still returned a result")
 	}
 }

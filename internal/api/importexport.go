@@ -251,7 +251,7 @@ func (s *server) handleImportKuma(w http.ResponseWriter, r *http.Request) {
 	// migration path now).
 	var mapped importexport.KumaResult
 	if bytes.HasPrefix(body, []byte("SQLite format 3\x00")) {
-		mapped, err = importexport.MapKumaDB(body)
+		mapped, err = importexport.MapKumaDB(r.Context(), body)
 	} else {
 		mapped, err = importexport.MapKuma(body)
 	}
