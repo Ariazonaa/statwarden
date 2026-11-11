@@ -363,3 +363,60 @@ func TestPublicAuthEndpointsRequireAJSONContentType(t *testing.T) {
 		t.Fatalf("login as application/json; charset=utf-8 = %d, want 200", rec.Code)
 	}
 }
+
+// Consuming a backup code was read, compare, write: the codes were read with the
+// credentials, the matching one removed in Go, and the rest written back. Two
+// requests carrying the same code both read the full list, both found their
+// code and both got in — a single-use code used several times. Two requests
+// carrying DIFFERENT codes each wrote back a list that still held the other's,
+// so one burned code came back to life.
+func TestBackupCodeConsumptionIsAtomic(t *testing.T) {
+	h := newHarness(t)
+	admin := h.setupAdmin()
+	_, plain := enableTOTPDirect(t, h, admin.userID)
+
+	login := func(code string) int {
+		return h.request(http.MethodPost, "/api/v1/auth/login", loginRequest{
+			Email: "admin@example.com", Password: "supersecret", BackupCode: code,
+		}).Code
+	}
+
+	// The same code, several times at once: exactly one may succeed.
+	const racers = 4
+	codes := make(chan int, racers)
+	var wg sync.WaitGroup
+	for range racers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			codes <- login(plain[0])
+		}()
+	}
+	wg.Wait()
+	close(codes)
+	ok := 0
+	for c := range codes {
+		if c == http.StatusOK {
+			ok++
+		}
+	}
+	if ok != 1 {
+		t.Fatalf("one backup code admitted %d concurrent logins, want exactly 1", ok)
+	}
+
+	// Two different codes at once: both may succeed, and neither may survive.
+	wg.Add(2)
+	for _, c := range plain[1:3] {
+		go func() {
+			defer wg.Done()
+			login(c)
+		}()
+	}
+	wg.Wait()
+	for i, c := range plain[1:3] {
+		if got := login(c); got != http.StatusUnauthorized {
+			t.Errorf("backup code %d after it was used = %d, want 401: a concurrent "+
+				"write brought it back", i+1, got)
+		}
+	}
+}

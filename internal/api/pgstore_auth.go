@@ -2,10 +2,14 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/netip"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/Ariazonaa/statwarden/internal/auth"
 )
 
 // This file holds the PgStore side of the account-security surface: external
@@ -148,4 +152,53 @@ func (s *PgStore) PasswordResetRedeemable(ctx context.Context, tokenHash string,
 			WHERE token_hash = $1 AND used_at IS NULL AND expires_at > $2
 		)`, tokenHash, now).Scan(&ok)
 	return ok, mapErr(err)
+}
+
+// ConsumeBackupCode implements Store. SELECT … FOR UPDATE holds the row from the
+// read of the codes to the write of what remains, so concurrent redemptions
+// serialise: the second sees the list the first left behind.
+func (s *PgStore) ConsumeBackupCode(ctx context.Context, userID int64, code string) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, mapErr(err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+
+	var raw []byte
+	// $1 id — one placeholder, one arg.
+	err = tx.QueryRow(ctx,
+		`SELECT backup_codes FROM users WHERE id = $1 AND totp_enabled FOR UPDATE`, userID).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, mapErr(err)
+	}
+	var stored []string
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &stored); err != nil {
+			return false, err
+		}
+	}
+	remaining, ok := auth.ConsumeBackupCode(stored, code)
+	if !ok {
+		return false, nil
+	}
+	// Same encoding SetUserTOTP writes: an empty list is stored as NULL.
+	var codesArg []byte
+	if len(remaining) > 0 {
+		if codesArg, err = json.Marshal(remaining); err != nil {
+			return false, err
+		}
+	}
+	// $1 id, $2 backup_codes — two placeholders, two args.
+	ct, err := tx.Exec(ctx,
+		`UPDATE users SET backup_codes = $2, updated_at = now() WHERE id = $1`, userID, codesArg)
+	if err := affected(ct, err); err != nil {
+		return false, err
+	}
+	if err := mapErr(tx.Commit(ctx)); err != nil {
+		return false, err
+	}
+	return true, nil
 }

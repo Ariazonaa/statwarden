@@ -180,18 +180,17 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 // compute, so an account that somehow carries totp_enabled with no secret must
 // refuse rather than accept.
 //
-// The backup-code branch writes through setUserTOTP, which re-seals, so
-// consuming a backup code also upgrades a legacy plaintext row.
+// A backup code is matched and burned by the store under a row lock, not
+// against the codes read with creds: matching the copy in hand and writing the
+// remainder back let concurrent requests spend one code several times, or undo
+// each other's burn. A store error counts as a failed factor.
 func (s *server) verifySecondFactor(r *http.Request, creds *Credentials, totpCode, backupCode string) bool {
 	if totpCode != "" && creds.TOTPSecret != "" && s.verifyTOTPOnce(creds.ID, creds.TOTPSecret, totpCode) {
 		return true
 	}
 	if backupCode != "" {
-		if remaining, ok := auth.ConsumeBackupCode(creds.BackupCodes, backupCode); ok {
-			if err := s.setUserTOTP(r.Context(), creds.ID, creds.TOTPSecret, true, remaining); err == nil {
-				return true
-			}
-		}
+		ok, err := s.store.ConsumeBackupCode(r.Context(), creds.ID, backupCode)
+		return err == nil && ok
 	}
 	return false
 }

@@ -130,13 +130,10 @@ func (s *server) consumeSecondFactor(r *http.Request, creds Credentials, code st
 	if s.verifyTOTPOnce(creds.ID, creds.TOTPSecret, code) {
 		return true
 	}
-	remaining, ok := auth.ConsumeBackupCode(creds.BackupCodes, code)
-	if !ok {
-		return false
-	}
 	// Single-use: a backup code that survived being accepted is not a backup
-	// code. A failure to persist the burn is treated as a failed factor rather
-	// than swallowed, so the code cannot be replayed.
-	p := principalFrom(r)
-	return s.setUserTOTP(r.Context(), p.userID, creds.TOTPSecret, true, remaining) == nil
+	// code. The store matches and burns it in one locked step (see
+	// verifySecondFactor), and a failure to persist the burn is treated as a
+	// failed factor rather than swallowed, so the code cannot be replayed.
+	ok, err := s.store.ConsumeBackupCode(r.Context(), creds.ID, code)
+	return err == nil && ok
 }
