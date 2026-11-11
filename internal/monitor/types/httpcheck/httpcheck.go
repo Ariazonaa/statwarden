@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -26,6 +27,7 @@ import (
 	"github.com/Ariazonaa/statwarden/internal/httpx"
 	"github.com/Ariazonaa/statwarden/internal/monitor/registry"
 	"github.com/Ariazonaa/statwarden/internal/monitor/sslcheck"
+	"github.com/Ariazonaa/statwarden/internal/netguard"
 )
 
 // TypeName is the registry name stored in monitors.type.
@@ -214,7 +216,12 @@ func (ch *Checker) newClient(c Config) (*http.Client, error) {
 		tlsCfg.Certificates = []tls.Certificate{cert}
 	}
 
-	transport := &http.Transport{TLSClientConfig: tlsCfg}
+	// The dialer carries the egress guard's hook, so it judges every address
+	// actually connected to: each redirect hop, each DNS answer, the proxy.
+	transport := &http.Transport{
+		TLSClientConfig: tlsCfg,
+		DialContext:     netguard.Dialer(&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+	}
 	if c.ProxyURL != "" {
 		proxyURL, err := url.Parse(c.ProxyURL)
 		if err != nil {

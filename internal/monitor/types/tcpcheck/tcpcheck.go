@@ -13,6 +13,7 @@ import (
 
 	"github.com/Ariazonaa/statwarden/internal/domain"
 	"github.com/Ariazonaa/statwarden/internal/monitor/registry"
+	"github.com/Ariazonaa/statwarden/internal/netguard"
 )
 
 // TypeName is the registry name stored in monitors.type.
@@ -56,7 +57,7 @@ func (*Checker) Check(ctx context.Context, cfg json.RawMessage) (domain.CheckRes
 	}
 
 	addr := net.JoinHostPort(c.Host, strconv.Itoa(c.Port))
-	var dialer net.Dialer
+	dialer := netguard.Dialer(&net.Dialer{})
 	start := time.Now()
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	latency := time.Since(start)

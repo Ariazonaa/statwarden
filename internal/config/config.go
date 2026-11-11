@@ -146,6 +146,12 @@ type Config struct {
 	// UploadsDir is the writable directory holding uploaded status-page logos.
 	// It must not escape the working directory.
 	UploadsDir string
+	// BlockPrivateTargets makes monitor checks and notification webhooks refuse
+	// loopback, private, link-local and similar addresses (see
+	// internal/netguard). Off by default: watching the local network is what
+	// most installations are for.
+	BlockPrivateTargets bool
+
 	// BackupEnabled turns on scheduled pg_dump backups. Off by default: a job
 	// that starts writing gigabytes to a volume is not something to switch on
 	// for an operator without being asked, and many deployments already have
@@ -484,6 +490,14 @@ func Load(lookup func(key string) (string, bool)) (*Config, error) {
 			addProblem("BACKUP_DIR: %q must not escape the working directory", raw)
 		} else {
 			cfg.BackupDir = clean
+		}
+	}
+	if raw, ok := env("BLOCK_PRIVATE_TARGETS"); ok {
+		b, err := strconv.ParseBool(raw)
+		if err != nil {
+			addProblem("BLOCK_PRIVATE_TARGETS: %q must be true or false", raw)
+		} else {
+			cfg.BlockPrivateTargets = b
 		}
 	}
 	if raw, ok := env("BACKUP_ENABLED"); ok {

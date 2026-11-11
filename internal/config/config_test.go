@@ -323,6 +323,7 @@ func TestLoadInvalidValues(t *testing.T) {
 		// which is why this knob's floor is 0 and not 1.
 		{"bad trash retention", "TRASH_RETENTION_DAYS", "-1"},
 		{"bad backup enabled", "BACKUP_ENABLED", "sometimes"},
+		{"bad block private targets", "BLOCK_PRIVATE_TARGETS", "maybe"},
 		{"bad backup interval", "BACKUP_INTERVAL_HOURS", "0"},
 		{"bad backup keep", "BACKUP_KEEP", "0"},
 		{"bad backup max age", "BACKUP_MAX_AGE_DAYS", "-1"},
@@ -708,6 +709,23 @@ func TestSetupToken(t *testing.T) {
 	}
 	if cfg.SetupToken != "provisioning-pass-for-ci" {
 		t.Fatalf("SETUP_TOKEN = %q, want the trimmed value", cfg.SetupToken)
+	}
+}
+
+// TestBlockPrivateTargets: off unless asked for, because watching the local
+// network is what most installations exist to do.
+func TestBlockPrivateTargets(t *testing.T) {
+	env := required()
+	cfg, err := Load(lookupMap(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BlockPrivateTargets {
+		t.Fatal("BLOCK_PRIVATE_TARGETS defaults to on; it must default to off")
+	}
+	env["BLOCK_PRIVATE_TARGETS"] = "true"
+	if cfg, err = Load(lookupMap(env)); err != nil || !cfg.BlockPrivateTargets {
+		t.Fatalf("BLOCK_PRIVATE_TARGETS=true: cfg=%v err=%v", cfg != nil && cfg.BlockPrivateTargets, err)
 	}
 }
 

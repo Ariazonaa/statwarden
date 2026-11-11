@@ -27,6 +27,7 @@ import (
 	"github.com/Ariazonaa/statwarden/internal/anomaly"
 	"github.com/Ariazonaa/statwarden/internal/domain"
 	"github.com/Ariazonaa/statwarden/internal/monitor/registry"
+	"github.com/Ariazonaa/statwarden/internal/netguard"
 	"github.com/Ariazonaa/statwarden/internal/safego"
 )
 
@@ -745,7 +746,15 @@ func (e *Engine) runCheck(j *job, m domain.Monitor, prev domain.MonitorStatus, r
 
 	ctx, cancel := context.WithTimeout(e.baseCtx, e.timeoutFor(m, checker))
 	start := time.Now()
-	res, err := e.safeCheck(ctx, checker, m.Config)
+	// The pre-flight of the optional egress guard. It runs here rather than in
+	// each checker because several checkers dial through client libraries this
+	// package cannot hand a dialer to; the dial-time hook in netguard covers the
+	// ones that can, including redirects and DNS answers that change.
+	var res domain.CheckResult
+	err := netguard.CheckConfig(ctx, m.Config)
+	if err == nil {
+		res, err = e.safeCheck(ctx, checker, m.Config)
+	}
 	elapsed := time.Since(start)
 	cancel()
 	// The base context ends only when Stop gives up waiting and aborts the

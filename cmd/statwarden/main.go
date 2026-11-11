@@ -33,6 +33,7 @@ import (
 	"github.com/Ariazonaa/statwarden/internal/monitor/engine"
 	"github.com/Ariazonaa/statwarden/internal/monitor/push"
 	"github.com/Ariazonaa/statwarden/internal/monitor/sslcheck"
+	"github.com/Ariazonaa/statwarden/internal/netguard"
 	"github.com/Ariazonaa/statwarden/internal/notify"
 	"github.com/Ariazonaa/statwarden/internal/notify/secrets"
 	"github.com/Ariazonaa/statwarden/internal/outbound"
@@ -340,6 +341,13 @@ func run() error {
 	}
 
 	logger := newLogger(cfg)
+
+	// Set before anything that dials starts: the engine, the dispatcher and
+	// the outbound webhooks all read it on every connection.
+	netguard.SetEnabled(cfg.BlockPrivateTargets)
+	if cfg.BlockPrivateTargets {
+		logger.Info("egress guard on: checks and webhooks refuse private, loopback and link-local targets")
+	}
 	slog.SetDefault(logger)
 
 	// Non-fatal configuration complaints. They are emitted here rather than
