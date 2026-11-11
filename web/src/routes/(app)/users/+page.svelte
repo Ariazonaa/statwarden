@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import LoadFailed from '$lib/components/LoadFailed.svelte';
 	import { api, problemMessage, type Role, type User } from '$lib/api';
 	import { session } from '$lib/stores/session.svelte';
 	import RelativeTime from '$lib/components/RelativeTime.svelte';
@@ -18,6 +19,7 @@
 
 	let items = $state<User[]>([]);
 	let loaded = $state(false);
+	let loadFailed = $state(false);
 
 	let editorOpen = $state(false);
 	let editing = $state<User | undefined>(undefined);
@@ -45,10 +47,18 @@
 				? t('users.roleUserShort')
 				: t('users.roleViewerShort');
 
-	onMount(async () => {
-		items = await api.listUsers();
-		loaded = true;
-	});
+	async function load() {
+		loaded = false;
+		loadFailed = false;
+		try {
+			items = await api.listUsers();
+		} catch {
+			loadFailed = true;
+		} finally {
+			loaded = true;
+		}
+	}
+	onMount(load);
 
 	function openCreate() {
 		editing = undefined;
@@ -122,6 +132,8 @@
 
 {#if !loaded}
 	<Skeleton variant="rect" height="8rem" />
+{:else if loadFailed}
+	<LoadFailed onretry={load} />
 {:else}
 	<div class="list">
 		{#each items as u (u.id)}

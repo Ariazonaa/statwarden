@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import LoadFailed from '$lib/components/LoadFailed.svelte';
 	import {
 		api,
 		configFromForm,
@@ -26,6 +27,7 @@
 
 	let items = $state<Notification[]>([]);
 	let loaded = $state(false);
+	let loadFailed = $state(false);
 	let testing = $state<string | undefined>(undefined);
 
 	let editorOpen = $state(false);
@@ -45,8 +47,14 @@
 
 	onMount(load);
 	async function load() {
-		items = await api.listNotifications();
-		loaded = true;
+		loadFailed = false;
+		try {
+			items = await api.listNotifications();
+		} catch {
+			loadFailed = true;
+		} finally {
+			loaded = true;
+		}
 	}
 
 	function openCreate() {
@@ -160,6 +168,8 @@
 
 {#if !loaded}
 	<Skeleton variant="rect" height="8rem" />
+{:else if loadFailed}
+	<LoadFailed onretry={load} />
 {:else if items.length === 0}
 	<GlassPanel radius="lg" class="nt-wrap">
 		<EmptyState

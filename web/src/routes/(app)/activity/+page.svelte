@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import LoadFailed from '$lib/components/LoadFailed.svelte';
 	import { api, auditLogExportUrl, type AuditEntry } from '$lib/api';
 	import RelativeTime from '$lib/components/RelativeTime.svelte';
 	import { session } from '$lib/stores/session.svelte';
@@ -8,6 +9,7 @@
 
 	let items = $state<AuditEntry[]>([]);
 	let loaded = $state(false);
+	let loadFailed = $state(false);
 	let query = $state('');
 
 	// ---- CSV export ----------------------------------------------------------
@@ -36,10 +38,18 @@
 		return auditLogExportUrl({ from });
 	});
 
-	onMount(async () => {
-		items = await api.auditLog();
-		loaded = true;
-	});
+	async function load() {
+		loaded = false;
+		loadFailed = false;
+		try {
+			items = await api.auditLog();
+		} catch {
+			loadFailed = true;
+		} finally {
+			loaded = true;
+		}
+	}
+	onMount(load);
 
 	const filtered = $derived.by(() => {
 		const q = query.trim().toLowerCase();
@@ -89,6 +99,8 @@
 
 {#if !loaded}
 	<Skeleton lines={6} />
+{:else if loadFailed}
+	<LoadFailed onretry={load} />
 {:else if filtered.length === 0}
 	<GlassPanel radius="lg" class="act-wrap">
 		<EmptyState title={t('activity.emptyTitle')} description={t('activity.emptyDescription')} />
