@@ -1,11 +1,14 @@
 package importexport
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver, registered as "sqlite" (no cgo)
 )
@@ -15,7 +18,11 @@ import (
 // database is the reliable migration source. Only the monitor, notification and
 // tag tables are read; heartbeat history is ignored. Field translation reuses
 // the same code as the JSON export path (mapKumaMonitorList / kumaMonitorConfig).
-func MapKumaDB(raw []byte) (KumaResult, error) {
+//
+// The read is bounded by ctx and by kumaReadTimeout, whichever ends first.
+func MapKumaDB(ctx context.Context, raw []byte) (KumaResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, kumaReadTimeout)
+	defer cancel()
 	// modernc's driver needs a file path, so stage the upload in a temp file.
 	f, err := os.CreateTemp("", "kuma-import-*.db")
 	if err != nil {
@@ -36,37 +43,88 @@ func MapKumaDB(raw []byte) (KumaResult, error) {
 		return KumaResult{}, fmt.Errorf("kuma db import: open database: %w", err)
 	}
 	defer func() { _ = db.Close() }()
-	if _, err := db.Exec("SELECT 1 FROM monitor LIMIT 1"); err != nil {
+	if err := checkKumaTables(ctx, db); err != nil {
+		return KumaResult{}, err
+	}
+	if _, err := db.ExecContext(ctx, "SELECT 1 FROM monitor LIMIT 1"); err != nil {
 		return KumaResult{}, fmt.Errorf("kuma db import: not an Uptime-Kuma database (no monitor table)")
 	}
 
-	tags, tagName, err := readKumaTags(db)
+	tags, tagName, err := readKumaTags(ctx, db)
 	if err != nil {
 		return KumaResult{}, err
 	}
-	monTags, err := readKumaMonitorTags(db, tagName)
+	monTags, err := readKumaMonitorTags(ctx, db, tagName)
 	if err != nil {
 		return KumaResult{}, err
 	}
 	// Notifications first: their id→name lookup lets us attach each monitor's
 	// channel assignments before the monitors are built.
-	notifs, notifName, nwarns, err := readKumaNotifications(db)
+	notifs, notifName, nwarns, err := readKumaNotifications(ctx, db)
 	if err != nil {
 		return KumaResult{}, err
 	}
-	monNotifs, err := readKumaMonitorNotifs(db, notifName)
+	monNotifs, err := readKumaMonitorNotifs(ctx, db, notifName)
 	if err != nil {
 		return KumaResult{}, err
 	}
-	mons, warns, err := readKumaMonitors(db, monTags, monNotifs)
+	mons, warns, err := readKumaMonitors(ctx, db, monTags, monNotifs)
 	if err != nil {
 		return KumaResult{}, err
+	}
+	// The readers above treat an unreadable optional table as absent, and a
+	// read cut off by the deadline looks exactly like that. Checked once here,
+	// so a timeout is an error rather than an import with pieces missing.
+	if err := ctx.Err(); err != nil {
+		return KumaResult{}, fmt.Errorf("kuma db import: reading the database took too long: %w", err)
 	}
 
 	res := KumaResult{Monitors: mons, Notifications: notifs, Tags: tags}
 	res.Warnings = append(res.Warnings, warns...)
 	res.Warnings = append(res.Warnings, nwarns...)
 	return res, nil
+}
+
+// kumaReadTimeout bounds reading an uploaded Kuma database. A real one, heartbeat
+// history included, is read in well under a second: only the small
+// configuration tables are queried.
+const kumaReadTimeout = 30 * time.Second
+
+// kumaTables are the tables MapKumaDB reads.
+var kumaTables = []string{"monitor", "tag", "monitor_tag", "notification", "monitor_notification"}
+
+// checkKumaTables refuses a database in which any table the importer reads is
+// something other than a plain table, or has computed columns.
+//
+// The upload is an arbitrary SQLite file, opened read-only but otherwise
+// trusted to be what it claims. A view under one of these names runs whatever
+// query it was defined with — a recursive CTE that never ends — and a virtual
+// table or a generated column evaluates code per row read. Uptime-Kuma writes
+// none of these, so refusing them costs a real migration nothing.
+func checkKumaTables(ctx context.Context, db *sql.DB) error {
+	for _, name := range kumaTables {
+		var typ, ddl string
+		err := db.QueryRowContext(ctx,
+			`SELECT type, COALESCE(sql, '') FROM sqlite_master WHERE name = ?`, name).Scan(&typ, &ddl)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue // absent: the readers decide whether that is fatal
+		}
+		if err != nil {
+			return fmt.Errorf("kuma db import: inspect %s: %w", name, err)
+		}
+		if typ != "table" || strings.HasPrefix(strings.ToUpper(strings.TrimSpace(ddl)), "CREATE VIRTUAL") {
+			return fmt.Errorf("kuma db import: %s is not a plain table; this does not look like an Uptime-Kuma database", name)
+		}
+		var computed int
+		if err := db.QueryRowContext(ctx,
+			`SELECT count(*) FROM pragma_table_xinfo(?) WHERE hidden <> 0`, name).Scan(&computed); err != nil {
+			return fmt.Errorf("kuma db import: inspect %s: %w", name, err)
+		}
+		if computed > 0 {
+			return fmt.Errorf("kuma db import: %s has computed columns; this does not look like an Uptime-Kuma database", name)
+		}
+	}
+	return nil
 }
 
 // tableColumns returns the column names present in a table, so a projection can
@@ -81,9 +139,9 @@ func MapKumaDB(raw []byte) (KumaResult, error) {
 // An unreadable table is reported as "no columns" rather than as an error: every
 // caller already treats an absent table as a non-fatal condition, and a table that
 // cannot even be introspected is indistinguishable from an absent one.
-func tableColumns(db *sql.DB, table string) map[string]bool {
+func tableColumns(ctx context.Context, db *sql.DB, table string) map[string]bool {
 	have := map[string]bool{}
-	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	rows, err := db.QueryContext(ctx, `SELECT name FROM pragma_table_info(?)`, table)
 	if err != nil {
 		return have
 	}
@@ -118,9 +176,9 @@ func projection(have map[string]bool, name, fallback string) string {
 
 // readKumaMonitorNotifs maps each monitor id to the names of the notification
 // channels assigned to it (Kuma's monitor_notification join table).
-func readKumaMonitorNotifs(db *sql.DB, notifName map[int64]string) (map[int64][]string, error) {
+func readKumaMonitorNotifs(ctx context.Context, db *sql.DB, notifName map[int64]string) (map[int64][]string, error) {
 	out := map[int64][]string{}
-	rows, err := db.Query(`SELECT monitor_id, notification_id FROM monitor_notification`)
+	rows, err := db.QueryContext(ctx, `SELECT monitor_id, notification_id FROM monitor_notification`)
 	if err != nil {
 		return out, nil //nolint:nilerr // absent join table is fine
 	}
@@ -138,17 +196,17 @@ func readKumaMonitorNotifs(db *sql.DB, notifName map[int64]string) (map[int64][]
 }
 
 // readKumaTags returns the tag specs and an id→name lookup.
-func readKumaTags(db *sql.DB) ([]TagSpec, map[int64]string, error) {
+func readKumaTags(ctx context.Context, db *sql.DB) ([]TagSpec, map[int64]string, error) {
 	// Same reason as readKumaMonitors: `color` is not in every Kuma schema, and a
 	// fixed projection naming it turned "this database has no colours" into "this
 	// database has no tags" — silently, because the query error is swallowed below
 	// on the assumption that it means the TABLE is absent.
-	have := tableColumns(db, "tag")
+	have := tableColumns(ctx, db, "tag")
 	if !have["id"] || !have["name"] {
 		return nil, map[int64]string{}, nil // no tag table (or not one we can read)
 	}
 	// Literals only, as in readKumaMonitors and readKumaNotifications.
-	rows, err := db.Query(`SELECT id, name, ` + projection(have, "color", "''") + ` FROM tag`) //nolint:gosec // G202: composed only of literals
+	rows, err := db.QueryContext(ctx, `SELECT id, name, `+projection(have, "color", "''")+` FROM tag`) //nolint:gosec // G202: composed only of literals
 	if err != nil {
 		// Very old Kuma has no tag table; that is not fatal.
 		return nil, map[int64]string{}, nil //nolint:nilerr // absent tag table is fine
@@ -169,9 +227,9 @@ func readKumaTags(db *sql.DB) ([]TagSpec, map[int64]string, error) {
 }
 
 // readKumaMonitorTags maps each monitor id to the names of its tags.
-func readKumaMonitorTags(db *sql.DB, tagName map[int64]string) (map[int64][]string, error) {
+func readKumaMonitorTags(ctx context.Context, db *sql.DB, tagName map[int64]string) (map[int64][]string, error) {
 	out := map[int64][]string{}
-	rows, err := db.Query(`SELECT monitor_id, tag_id FROM monitor_tag`)
+	rows, err := db.QueryContext(ctx, `SELECT monitor_id, tag_id FROM monitor_tag`)
 	if err != nil {
 		return out, nil //nolint:nilerr // absent join table is fine
 	}
@@ -192,7 +250,7 @@ func readKumaMonitorTags(db *sql.DB, tagName map[int64]string) (map[int64][]stri
 // the shared mapKumaMonitorList. The projection is built from the columns the
 // source schema actually has, so a Kuma old enough to be missing some of them
 // still imports — see the comment inside.
-func readKumaMonitors(db *sql.DB, monTags, monNotifs map[int64][]string) ([]MonitorSpec, []string, error) {
+func readKumaMonitors(ctx context.Context, db *sql.DB, monTags, monNotifs map[int64][]string) ([]MonitorSpec, []string, error) {
 	// The projection is built from the columns this database actually has.
 	//
 	// It used to be a fixed list, with a comment claiming that "columns absent in
@@ -203,7 +261,7 @@ func readKumaMonitors(db *sql.DB, monTags, monNotifs map[int64][]string) ([]Moni
 	// `no such column: dns_resolve_type` before reading a row — the exact case the
 	// comment promised to handle, in a feature whose entire job is to read a
 	// database written by some other version.
-	have := tableColumns(db, "monitor")
+	have := tableColumns(ctx, db, "monitor")
 	for _, required := range []string{"id", "name", "type"} {
 		if !have[required] {
 			return nil, nil, fmt.Errorf(
@@ -229,7 +287,7 @@ func readKumaMonitors(db *sql.DB, monTags, monNotifs map[int64][]string) ([]Moni
 		projection(have, "accepted_statuscodes_json", "''"),
 		projection(have, "ignore_tls", "0"),
 	}, ", ") + ` FROM monitor ORDER BY id`
-	rows, err := db.Query(q)
+	rows, err := db.QueryContext(ctx, q)
 	if err != nil {
 		return nil, nil, fmt.Errorf("kuma db import: query monitors: %w", err)
 	}
@@ -298,14 +356,14 @@ func readKumaMonitors(db *sql.DB, monTags, monNotifs map[int64][]string) ([]Moni
 // type and its secrets inside the JSON `config` column; we read the type and
 // create a matching, inactive-config stub, asking the operator to re-enter
 // credentials (mirroring the JSON import).
-func readKumaNotifications(db *sql.DB) ([]NotificationSpec, map[int64]string, []string, error) {
+func readKumaNotifications(ctx context.Context, db *sql.DB) ([]NotificationSpec, map[int64]string, []string, error) {
 	nameByID := map[int64]string{}
 	// Built from the schema present, for the reason readKumaMonitors gives. Here the
 	// old behaviour was the quietest of the three: a missing `active` or `config`
 	// column failed the query, the error was swallowed as "no notification table",
 	// and every channel plus every monitor's alert routing disappeared from the
 	// import without a warning.
-	have := tableColumns(db, "notification")
+	have := tableColumns(ctx, db, "notification")
 	if !have["id"] || !have["name"] {
 		return nil, nameByID, nil, nil // no notification table (or not one we can read)
 	}
@@ -315,9 +373,9 @@ func readKumaNotifications(db *sql.DB) ([]NotificationSpec, map[int64]string, []
 	// a membership test alone. A foreign column name never reaches the string;
 	// it only decides which of two constants is chosen. Pass a dynamic name to
 	// projection and this stops being true.
-	rows, err := db.Query(`SELECT id, name, ` + //nolint:gosec // G202: composed only of literals, see above
-		projection(have, "config", "''") + `, ` +
-		projection(have, "active", "1") + ` FROM notification`)
+	rows, err := db.QueryContext(ctx, `SELECT id, name, `+ //nolint:gosec // G202: composed only of literals, see above
+		projection(have, "config", "''")+`, `+
+		projection(have, "active", "1")+` FROM notification`)
 	if err != nil {
 		return nil, nameByID, nil, nil //nolint:nilerr // absent notification table is fine
 	}
