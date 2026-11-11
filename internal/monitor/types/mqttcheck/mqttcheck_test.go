@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Ariazonaa/statwarden/internal/domain"
 	"github.com/Ariazonaa/statwarden/internal/monitor/registry"
@@ -125,5 +128,43 @@ func TestAFailedAssertionDoesNotEchoTheObservedValue(t *testing.T) {
 	}
 	if !strings.Contains(msg, "online") {
 		t.Errorf("the message dropped the operator's own expectation: %q", msg)
+	}
+}
+
+// A broker that accepts the TCP connection and never answers CONNECT. The probe
+// waited out connect_timeout_seconds — which nothing caps — regardless of the
+// check's own deadline, and on giving up left paho's connection attempt running.
+// It must return when the check's context ends, and close the connection.
+func TestLiveProbeHonoursTheContextAndHangsUp(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	closed := make(chan struct{})
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.Copy(io.Discard, conn) // swallow CONNECT, answer nothing
+		close(closed)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err = liveProbe(ctx, Config{Broker: "tcp://" + ln.Addr().String(), ConnectTimeoutSeconds: 5})
+	if err == nil {
+		t.Fatal("liveProbe against a silent broker succeeded")
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("liveProbe returned after %s, want it bounded by the 200ms context", d)
+	}
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the abandoned connection attempt was left open")
 	}
 }

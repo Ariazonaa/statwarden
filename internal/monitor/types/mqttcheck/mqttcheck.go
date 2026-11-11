@@ -9,6 +9,7 @@ package mqttcheck
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -143,20 +144,36 @@ func (c Config) clientOptions() (*mqtt.ClientOptions, error) {
 }
 
 // liveProbe performs the real broker connection and optional round-trip.
+//
+// Every wait ends at the earlier of connect_timeout_seconds and the check's own
+// context. Token.WaitTimeout alone ignored the context, so a configured timeout
+// longer than the check's ran on after the engine had given up — and at
+// shutdown, past the drain the engine waits for.
 func liveProbe(ctx context.Context, c Config) (probeResult, error) {
 	timeout := time.Duration(c.connectTimeout()) * time.Second
+	if deadline, ok := ctx.Deadline(); ok {
+		timeout = min(timeout, time.Until(deadline))
+	}
+	if timeout <= 0 {
+		// Already out of time, and paho reads a zero connect timeout as "none".
+		return probeResult{}, fmt.Errorf("connect: %w", context.DeadlineExceeded)
+	}
 
 	opts, err := c.clientOptions()
 	if err != nil {
 		return probeResult{}, err
 	}
+	opts.SetConnectTimeout(timeout)
 	client := mqtt.NewClient(opts)
 
-	tok := client.Connect()
-	if !tok.WaitTimeout(timeout) {
-		return probeResult{}, fmt.Errorf("connect timed out after %s", timeout)
-	}
-	if err := tok.Error(); err != nil {
+	if err := waitToken(ctx, client.Connect(), timeout); err != nil {
+		// A connect that has not finished keeps running inside paho, holding its
+		// socket until its own timeout; Disconnect is what aborts it. Quiesce 0:
+		// nothing was established that could be flushed.
+		client.Disconnect(0)
+		if errors.Is(err, errTokenTimeout) {
+			return probeResult{}, fmt.Errorf("connect timed out after %s", timeout)
+		}
 		return probeResult{}, err
 	}
 	defer client.Disconnect(250)
@@ -172,30 +189,48 @@ func liveProbe(ctx context.Context, c Config) (probeResult, error) {
 		default:
 		}
 	}
-	sub := client.Subscribe(c.Topic, 0, handler)
-	if !sub.WaitTimeout(timeout) {
-		return probeResult{}, fmt.Errorf("subscribe to %q timed out", c.Topic)
-	}
-	if err := sub.Error(); err != nil {
+	if err := waitToken(ctx, client.Subscribe(c.Topic, 0, handler), timeout); err != nil {
+		if errors.Is(err, errTokenTimeout) {
+			return probeResult{}, fmt.Errorf("subscribe to %q timed out", c.Topic)
+		}
 		return probeResult{}, err
 	}
 
 	if c.PublishPayload != "" {
-		pub := client.Publish(c.Topic, 0, false, c.PublishPayload)
-		if !pub.WaitTimeout(timeout) {
-			return probeResult{}, fmt.Errorf("publish to %q timed out", c.Topic)
-		}
-		if err := pub.Error(); err != nil {
+		if err := waitToken(ctx, client.Publish(c.Topic, 0, false, c.PublishPayload), timeout); err != nil {
+			if errors.Is(err, errTokenTimeout) {
+				return probeResult{}, fmt.Errorf("publish to %q timed out", c.Topic)
+			}
 			return probeResult{}, err
 		}
 	}
 
+	wait := time.NewTimer(timeout)
+	defer wait.Stop()
 	select {
 	case m := <-msgCh:
 		return probeResult{subscribed: true, gotMessage: true, payload: string(m.Payload())}, nil
 	case <-ctx.Done():
 		return probeResult{subscribed: true}, nil
-	case <-time.After(timeout):
+	case <-wait.C:
 		return probeResult{subscribed: true}, nil
+	}
+}
+
+// errTokenTimeout is waitToken's own timeout, told apart from the context's.
+var errTokenTimeout = errors.New("mqtt: operation timed out")
+
+// waitToken waits for a paho token, the context or the timeout, whichever ends
+// first, and returns the token's error when it completed.
+func waitToken(ctx context.Context, tok mqtt.Token, timeout time.Duration) error {
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case <-tok.Done():
+		return tok.Error()
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return errTokenTimeout
 	}
 }
