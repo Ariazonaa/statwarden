@@ -629,6 +629,42 @@ func runStoreContract(t *testing.T, newFixture func(t *testing.T) storeFixture) 
 		}
 	})
 
+	// The link tables cascade on PostgreSQL; MemStore kept the dangling ids,
+	// so in DEV_MODE a monitor went on listing a deleted tag or channel and the
+	// next save of it was refused for naming one that does not exist.
+	t.Run("deleting a tag or channel unlinks it from every monitor", func(t *testing.T) {
+		f := newFixture(t)
+		tag, err := f.Store.CreateTag(ctx, "gone", "#123456")
+		if err != nil {
+			t.Fatalf("CreateTag: %v", err)
+		}
+		n, err := f.Store.CreateNotification(ctx, Notification{Name: "gone", Type: "fake", Config: []byte(`{}`), Active: true})
+		if err != nil {
+			t.Fatalf("CreateNotification: %v", err)
+		}
+		id := newMonitor(t, f, "linked")
+		if err := f.Store.AddMonitorTags(ctx, id, []int64{tag.ID}); err != nil {
+			t.Fatalf("AddMonitorTags: %v", err)
+		}
+		if err := f.Store.AddMonitorNotifications(ctx, id, []int64{n.ID}); err != nil {
+			t.Fatalf("AddMonitorNotifications: %v", err)
+		}
+
+		if err := f.Store.DeleteTag(ctx, tag.ID); err != nil {
+			t.Fatalf("DeleteTag: %v", err)
+		}
+		if err := f.Store.DeleteNotification(ctx, n.ID); err != nil {
+			t.Fatalf("DeleteNotification: %v", err)
+		}
+		links, err := f.Store.MonitorLinks(ctx, []int64{id})
+		if err != nil {
+			t.Fatalf("MonitorLinks: %v", err)
+		}
+		if l := links[id]; len(l.TagIDs) != 0 || len(l.NotificationIDs) != 0 {
+			t.Fatalf("links after deleting the tag and channel = %+v, want none", l)
+		}
+	})
+
 	t.Run("purge refuses a live monitor and destroys a binned one", func(t *testing.T) {
 		f := newFixture(t)
 		id := newMonitor(t, f, "doomed")
