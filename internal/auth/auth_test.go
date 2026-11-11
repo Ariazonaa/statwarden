@@ -2,6 +2,7 @@ package auth
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -210,5 +211,52 @@ func TestSessionFingerprint(t *testing.T) {
 	// hash, so it must not appear verbatim inside it.
 	if strings.Contains(hashA, a) {
 		t.Errorf("fingerprint %q appears verbatim inside the stored hash", a)
+	}
+}
+
+// Every argon2 derivation allocates the full memory cost (64 MiB by default),
+// and the login, reset-confirm and setup endpoints run one for any
+// unauthenticated caller. Unbounded, a burst of concurrent attempts is a burst
+// of 64 MiB allocations; the slots cap how many run at once and queue the rest.
+func TestKDFConcurrencyIsBounded(t *testing.T) {
+	origSlots, origDerive := kdfSlots, kdf
+	kdfSlots = make(chan struct{}, 2)
+	t.Cleanup(func() { kdfSlots, kdf = origSlots, origDerive })
+
+	var mu sync.Mutex
+	running, peak := 0, 0
+	release := make(chan struct{})
+	kdf = func(_, _ []byte, _, _ uint32, _ uint8, keyLen uint32) []byte {
+		mu.Lock()
+		running++
+		if running > peak {
+			peak = running
+		}
+		mu.Unlock()
+		<-release
+		mu.Lock()
+		running--
+		mu.Unlock()
+		return make([]byte, keyLen)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 6; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = VerifyPassword("pw", "")
+		}()
+	}
+	// Give every goroutine the chance to reach the KDF, then let them drain.
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	if peak > 2 {
+		t.Fatalf("%d derivations ran at once, want at most the 2 slots", peak)
+	}
+	if peak == 0 {
+		t.Fatal("no derivation ran at all")
 	}
 }

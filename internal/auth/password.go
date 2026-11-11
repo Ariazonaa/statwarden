@@ -44,6 +44,29 @@ var ErrInvalidHash = errors.New("auth: invalid password hash format")
 // KDF actually runs — the only observable a timing property has in a unit test.
 var kdf = argon2.IDKey
 
+// maxConcurrentKDF bounds how many argon2 derivations run at once.
+//
+// Each one allocates the full memory cost — 64 MiB with the defaults — and the
+// login, password-reset and setup endpoints run one for any unauthenticated
+// caller, so the per-client rate limits are the only thing standing between a
+// burst of parallel requests and a burst of 64 MiB allocations. Four slots cap
+// that at 256 MiB; further derivations queue for a slot instead of piling onto
+// the heap, which on the small machines this is self-hosted on is the
+// difference between slower logins and the process being killed.
+const maxConcurrentKDF = 4
+
+// kdfSlots is the semaphore behind maxConcurrentKDF. A variable so a test can
+// shrink it.
+var kdfSlots = make(chan struct{}, maxConcurrentKDF)
+
+// idKey is kdf run inside a kdfSlots slot. Every derivation in this
+// package goes through it.
+func idKey(password, salt []byte, iterations, memory uint32, threads uint8, keyLen uint32) []byte {
+	kdfSlots <- struct{}{}
+	defer func() { <-kdfSlots }()
+	return kdf(password, salt, iterations, memory, threads, keyLen)
+}
+
 // HashPassword hashes password with argon2id and encodes the result as a
 // self-describing PHC string ($argon2id$v=19$m=…,t=…,p=…$salt$hash), so
 // VerifyPassword can re-derive the parameters without external state.
@@ -56,7 +79,7 @@ func hashPasswordWith(password string, p Argon2Params) (string, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("auth: read salt: %w", err)
 	}
-	key := argon2.IDKey([]byte(password), salt, p.Iterations, p.Memory, p.Parallelism, p.KeyLength)
+	key := idKey([]byte(password), salt, p.Iterations, p.Memory, p.Parallelism, p.KeyLength)
 	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
 		argon2.Version, p.Memory, p.Iterations, p.Parallelism,
 		base64.RawStdEncoding.EncodeToString(salt),
@@ -77,10 +100,10 @@ func VerifyPassword(password, encoded string) (bool, error) {
 	p, salt, want, err := decodeHash(encoded)
 	if err != nil {
 		d := DefaultArgon2Params
-		_ = kdf([]byte(password), make([]byte, d.SaltLength), d.Iterations, d.Memory, d.Parallelism, d.KeyLength)
+		_ = idKey([]byte(password), make([]byte, d.SaltLength), d.Iterations, d.Memory, d.Parallelism, d.KeyLength)
 		return false, err
 	}
-	got := kdf([]byte(password), salt, p.Iterations, p.Memory, p.Parallelism, p.KeyLength)
+	got := idKey([]byte(password), salt, p.Iterations, p.Memory, p.Parallelism, p.KeyLength)
 	if subtle.ConstantTimeCompare(got, want) == 1 {
 		return true, nil
 	}
