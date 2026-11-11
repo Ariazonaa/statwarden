@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"time"
@@ -131,6 +132,12 @@ type engineInspect struct {
 	} `json:"State"`
 }
 
+// maxInspectBytes caps the inspect response. A real one is a few KiB (tens with
+// a large environment); json.Decoder buffers the whole value before decoding,
+// so without a cap an endpoint answering with an endless document grows this
+// process's memory for as long as the check runs.
+const maxInspectBytes = 4 << 20
+
 // liveInspect performs the real Engine-API inspect over the unix socket or TCP.
 func liveInspect(ctx context.Context, c Config) (containerState, error) {
 	tr, err := c.resolveTransport()
@@ -178,7 +185,11 @@ func liveInspect(ctx context.Context, c Config) (containerState, error) {
 	}
 
 	var inspect engineInspect
-	if err := json.NewDecoder(resp.Body).Decode(&inspect); err != nil {
+	body := &io.LimitedReader{R: resp.Body, N: maxInspectBytes}
+	if err := json.NewDecoder(body).Decode(&inspect); err != nil {
+		if body.N <= 0 {
+			return containerState{}, fmt.Errorf("inspect response exceeds %d MiB", maxInspectBytes>>20)
+		}
 		return containerState{}, fmt.Errorf("decode inspect response: %w", err)
 	}
 	st := containerState{status: inspect.State.Status}
