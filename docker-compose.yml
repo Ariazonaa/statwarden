@@ -73,6 +73,8 @@ services:
       ENCRYPTION_KEY: "${ENCRYPTION_KEY:?ENCRYPTION_KEY is required (generate with: openssl rand -base64 48)}"
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:3001}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      # Optional first-run setup secret; unset, one is generated and logged.
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       LOG_FORMAT: ${LOG_FORMAT:-json}
       UPLOADS_DIR: /data/uploads

@@ -178,6 +178,7 @@ func loginProbe(t *testing.T, h http.Handler, peer, forwarded string) int {
 func newIPHarness(t *testing.T, trusted ...string) http.Handler {
 	t.Helper()
 	return New(Options{
+		SetupToken:     testSetupToken,
 		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Store:          NewMemStore(),
 		TrustedProxies: mustPrefixes(t, trusted...),

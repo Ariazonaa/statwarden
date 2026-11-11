@@ -47,6 +47,7 @@ func TestRequestLoggerRedactsPushToken(t *testing.T) {
 	nr := notifyreg.New()
 	nr.Register(fakeNotifier{})
 	h := New(Options{
+		SetupToken:      testSetupToken,
 		Logger:          logger,
 		Store:           store,
 		MonitorRegistry: mr,

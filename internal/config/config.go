@@ -125,6 +125,9 @@ type Config struct {
 	DatabaseURL   string
 	SessionSecret string
 	EncryptionKey string
+	// SetupToken, when set, is the first-run setup secret instead of one the
+	// server generates and logs. For headless provisioning; "" means generate.
+	SetupToken string
 
 	// Server.
 	Port int
@@ -401,6 +404,16 @@ func Load(lookup func(key string) (string, bool)) (*Config, error) {
 			addProblem("LISTEN_ADDR: %q must be an IP address such as 127.0.0.1 or ::1 (the port comes from PORT)", raw)
 		} else {
 			cfg.ListenAddr = a.String()
+		}
+	}
+
+	// The setup token guards an endpoint that makes its caller an admin, so a
+	// short one would undo the point of having one.
+	if raw, ok := env("SETUP_TOKEN"); ok {
+		if len(raw) < minSetupTokenLen {
+			addProblem("SETUP_TOKEN: must be at least %d characters (or unset to have one generated)", minSetupTokenLen)
+		} else {
+			cfg.SetupToken = raw
 		}
 	}
 
@@ -754,6 +767,9 @@ func loadAnomaly(
 	c.Consecutive = intVar("ANOMALY_CONSECUTIVE", DefaultAnomalyConsecutive, 1)
 	return c
 }
+
+// minSetupTokenLen is the shortest SETUP_TOKEN accepted.
+const minSetupTokenLen = 16
 
 // Addr returns the listen address derived from ListenAddr and Port, e.g.
 // ":3001" (every interface), "127.0.0.1:3001" or "[::1]:3001".

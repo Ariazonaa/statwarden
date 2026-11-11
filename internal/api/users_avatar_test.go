@@ -40,6 +40,7 @@ func newAvatarHarness(t *testing.T) *avatarHarness {
 		t.Fatalf("new avatar store: %v", err)
 	}
 	h := New(Options{
+		SetupToken:      testSetupToken,
 		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Store:           store,
 		Engine:          eng,

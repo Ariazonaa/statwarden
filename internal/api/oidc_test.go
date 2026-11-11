@@ -115,6 +115,7 @@ func newOIDCHarness(t *testing.T, tweak func(*OIDCProvider)) *oidcHarness {
 	}
 
 	h := New(Options{
+		SetupToken:      testSetupToken,
 		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Store:           store,
 		Engine:          eng,
@@ -1010,6 +1011,7 @@ func TestOIDCLinkSucceedsForTheAuthenticatedUser(t *testing.T) {
 func TestSignedFlowCookieRejectsTampering(t *testing.T) {
 	h := newOIDCHarness(t, nil)
 	h.handler = New(Options{
+		SetupToken:    testSetupToken,
 		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Store:         h.store,
 		Engine:        h.engine,

@@ -41,6 +41,7 @@ func newLogoHarness(t *testing.T) *logoHarness {
 	rep := &fakeReporter{uptime: report.UptimeResult{Up: 100, Total: 100, Uptime: 1.0}}
 	dir := t.TempDir()
 	h := New(Options{
+		SetupToken:      testSetupToken,
 		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Store:           store,
 		Engine:          eng,

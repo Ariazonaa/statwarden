@@ -2880,7 +2880,7 @@
           {
             "name": "months",
             "in": "query",
-            "description": "Calendar months to include, newest last. Never rejected: above 120 is clamped to 120, and below 1 (or unparseable) falls back to the default of 24 rather than answering 400. This is a zoom level on a public page, and a stray link must not become an error screen for a visitor who cannot fix it \u2014 which is also why the schema states no minimum: one would promise a rejection that never happens.",
+            "description": "Calendar months to include, newest last. Never rejected: above 120 is clamped to 120, and below 1 (or unparseable) falls back to the default of 24 rather than answering 400. This is a zoom level on a public page, and a stray link must not become an error screen for a visitor who cannot fix it — which is also why the schema states no minimum: one would promise a rejection that never happens.",
             "schema": {
               "type": "integer",
               "maximum": 120,
@@ -3285,7 +3285,7 @@
         ],
         "operationId": "runSetup",
         "summary": "Create the initial admin account",
-        "description": "Public, but only while no user exists; afterwards it is refused. On success a session is issued.",
+        "description": "Public, but only while no user exists; afterwards it is refused. Requires the setup token from the startup log. On success a session is issued.",
         "security": [],
         "requestBody": {
           "required": true,
@@ -3319,6 +3319,12 @@
           },
           "415": {
             "$ref": "#/components/responses/NotJSON"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         }
       }
@@ -5159,7 +5165,7 @@
           "postmortem_published_at": {
             "type": "string",
             "format": "date-time",
-            "description": "When the retrospective was published. ABSENT \u2014 not null \u2014 while it is still a draft: the field is omitempty, so a draft carries no key at all."
+            "description": "When the retrospective was published. ABSENT — not null — while it is still a draft: the field is omitempty, so a draft carries no key at all."
           },
           "created_at": {
             "type": "string",
@@ -6038,7 +6044,8 @@
         "type": "object",
         "required": [
           "email",
-          "password"
+          "password",
+          "setup_token"
         ],
         "properties": {
           "email": {
@@ -6052,6 +6059,10 @@
           },
           "display_name": {
             "type": "string"
+          },
+          "setup_token": {
+            "type": "string",
+            "description": "One-time secret printed in the server log at startup while no account exists (or the value of SETUP_TOKEN)."
           }
         }
       },

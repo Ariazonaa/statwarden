@@ -27,7 +27,7 @@ func testDist() fstest.MapFS {
 
 func newTestHandler(t *testing.T) http.Handler {
 	t.Helper()
-	return New(Options{Logger: testLogger(), Static: SPA(testDist())})
+	return New(Options{SetupToken: testSetupToken, Logger: testLogger(), Static: SPA(testDist())})
 }
 
 func do(t *testing.T, h http.Handler, method, target string) *httptest.ResponseRecorder {
@@ -114,8 +114,9 @@ func TestSPAServesIndexAndFallback(t *testing.T) {
 
 func TestSPAWithoutBuildReturns503(t *testing.T) {
 	h := New(Options{
-		Logger: testLogger(),
-		Static: SPA(fstest.MapFS{".gitkeep": {Data: []byte("")}}),
+		SetupToken: testSetupToken,
+		Logger:     testLogger(),
+		Static:     SPA(fstest.MapFS{".gitkeep": {Data: []byte("")}}),
 	})
 	rec := do(t, h, http.MethodGet, "/")
 	if rec.Code != http.StatusServiceUnavailable {
@@ -127,7 +128,7 @@ func TestSPAWithoutBuildReturns503(t *testing.T) {
 }
 
 func TestPanicIsRecovered(t *testing.T) {
-	h := New(Options{Logger: testLogger(), Static: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	h := New(Options{SetupToken: testSetupToken, Logger: testLogger(), Static: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic("boom")
 	})})
 	rec := do(t, h, http.MethodGet, "/anything")

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"net/http"
 	"strings"
@@ -34,6 +35,8 @@ type setupRequest struct {
 	Username    string `json:"username"`
 	Password    string `json:"password"`
 	DisplayName string `json:"display_name"`
+	// SetupToken is the one-time secret from the startup log.
+	SetupToken string `json:"setup_token"`
 }
 
 // handleSetup creates the initial admin account. It only works while no users
@@ -53,6 +56,17 @@ func (s *server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	var req setupRequest
 	if !decodeJSON(w, r, &req) {
+		return
+	}
+	// Checked before anything about the request is validated, so a caller
+	// without the token learns nothing from the answer. Compared in constant
+	// time like every other secret here.
+	if s.setupToken == "" {
+		writeProblemDetail(w, http.StatusServiceUnavailable, "setup is not available: no setup token is configured")
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(req.SetupToken), []byte(s.setupToken)) != 1 {
+		writeProblemDetail(w, http.StatusForbidden, "invalid setup token: it is printed in the server log at startup")
 		return
 	}
 	if err := validateCredentials(req.Email, req.Password); err != nil {

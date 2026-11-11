@@ -25,6 +25,7 @@ func newTTLHarness(t *testing.T, ttl time.Duration) *harness {
 	nr := notifyreg.New()
 	nr.Register(fakeNotifier{})
 	h := New(Options{
+		SetupToken:      testSetupToken,
 		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Store:           store,
 		Engine:          eng,

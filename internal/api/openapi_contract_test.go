@@ -151,13 +151,14 @@ func walkRoutes(t *testing.T) map[string]struct{} {
 		t.Fatalf("avatar store: %v", err)
 	}
 	h := New(Options{
-		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Store:   NewMemStore(),
-		Engine:  newFakeEngine(),
-		Hub:     stubWSHub{},
-		Logos:   logos,
-		Avatars: avatars,
-		Metrics: http.NotFoundHandler(),
+		SetupToken: testSetupToken,
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Store:      NewMemStore(),
+		Engine:     newFakeEngine(),
+		Hub:        stubWSHub{},
+		Logos:      logos,
+		Avatars:    avatars,
+		Metrics:    http.NotFoundHandler(),
 		// A provider is configured so the conditional SSO routes register and
 		// are therefore compared against the spec. Constructing one performs no
 		// network I/O — discovery is lazy — so this costs nothing here.
@@ -277,13 +278,14 @@ func TestOpenAPIExclusionsAreReachable(t *testing.T) {
 		t.Fatalf("avatar store: %v", err)
 	}
 	h := New(Options{
-		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Store:   NewMemStore(),
-		Engine:  newFakeEngine(),
-		Hub:     stubWSHub{},
-		Logos:   logos,
-		Avatars: avatars,
-		Metrics: http.NotFoundHandler(),
+		SetupToken: testSetupToken,
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Store:      NewMemStore(),
+		Engine:     newFakeEngine(),
+		Hub:        stubWSHub{},
+		Logos:      logos,
+		Avatars:    avatars,
+		Metrics:    http.NotFoundHandler(),
 		// A provider is configured so the conditional SSO routes register and
 		// are therefore compared against the spec. Constructing one performs no
 		// network I/O — discovery is lazy — so this costs nothing here.

@@ -311,6 +311,8 @@ func TestLoadInvalidValues(t *testing.T) {
 		{"listen addr with a port", "LISTEN_ADDR", "127.0.0.1:3001"},
 		{"listen addr as a hostname", "LISTEN_ADDR", "localhost"},
 		{"listen addr not an address", "LISTEN_ADDR", "not-an-ip"},
+		// Short enough to guess while the setup page is open to the network.
+		{"setup token too short", "SETUP_TOKEN", "short"},
 		{"bad log level", "LOG_LEVEL", "verbose"},
 		{"bad log format", "LOG_FORMAT", "xml"},
 		{"bad locale", "DEFAULT_LOCALE", "fr"},
@@ -685,6 +687,27 @@ func TestPlainHTTPBaseURLWarns(t *testing.T) {
 		if got := warned(env); got != tc.want {
 			t.Errorf("PUBLIC_BASE_URL=%q DEV_MODE=%v: warned = %v, want %v", tc.url, tc.dev, got, tc.want)
 		}
+	}
+}
+
+// TestSetupToken: an operator who provisions headlessly sets the token
+// instead of reading it from the log; unset, the server generates one.
+func TestSetupToken(t *testing.T) {
+	env := required()
+	cfg, err := Load(lookupMap(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SetupToken != "" {
+		t.Fatalf("unset SETUP_TOKEN = %q, want empty (the server generates one)", cfg.SetupToken)
+	}
+	env["SETUP_TOKEN"] = "  provisioning-pass-for-ci  "
+	cfg, err = Load(lookupMap(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SetupToken != "provisioning-pass-for-ci" {
+		t.Fatalf("SETUP_TOKEN = %q, want the trimmed value", cfg.SetupToken)
 	}
 }
 

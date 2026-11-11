@@ -35,7 +35,7 @@ func TestSetupFlow(t *testing.T) {
 	if status["needs_setup"] {
 		t.Fatal("expected needs_setup=false after setup")
 	}
-	rec = h.request(http.MethodPost, "/api/v1/setup", setupRequest{Email: "x@y.z", Password: "supersecret"})
+	rec = h.request(http.MethodPost, "/api/v1/setup", setupRequest{Email: "x@y.z", Password: "supersecret", SetupToken: testSetupToken})
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("second setup = %d, want 409", rec.Code)
 	}

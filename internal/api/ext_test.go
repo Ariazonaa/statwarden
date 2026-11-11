@@ -103,6 +103,7 @@ func newExtHarness(t *testing.T, rep Reporter, pr PushRecorder) *harness {
 	nr.Register(namedNotifier("slack"))
 
 	h := New(Options{
+		SetupToken:      testSetupToken,
 		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Store:           store,
 		Engine:          eng,

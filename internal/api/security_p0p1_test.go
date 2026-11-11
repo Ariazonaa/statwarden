@@ -146,7 +146,7 @@ func TestMetricsClosedWithoutToken(t *testing.T) {
 	// unset, set, and unset again — rotation and removal take effect without a
 	// restart, which they did not while it was read once at startup.
 	token := ""
-	srv := New(Options{Logger: log, Store: NewMemStore(), Metrics: metrics,
+	srv := New(Options{SetupToken: testSetupToken, Logger: log, Store: NewMemStore(), Metrics: metrics,
 		MetricsToken: func(context.Context) string { return token }})
 	get := func() *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
@@ -176,7 +176,7 @@ func TestMetricsClosedWithoutToken(t *testing.T) {
 	}
 
 	// No token source at all is the closed state too.
-	none := New(Options{Logger: log, Store: NewMemStore(), Metrics: metrics})
+	none := New(Options{SetupToken: testSetupToken, Logger: log, Store: NewMemStore(), Metrics: metrics})
 	rec = httptest.NewRecorder()
 	none.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if rec.Code != http.StatusNotFound {
@@ -210,6 +210,7 @@ func TestWebSocketOriginValidated(t *testing.T) {
 	newServer := func() (http.Handler, *recordingWSHub) {
 		hub := &recordingWSHub{}
 		h := New(Options{
+			SetupToken:    testSetupToken,
 			Logger:        log,
 			Store:         NewMemStore(),
 			Hub:           hub,
@@ -254,6 +255,7 @@ func TestWebSocketOriginValidated(t *testing.T) {
 	allowServer := func() (http.Handler, *recordingWSHub) {
 		hub := &recordingWSHub{}
 		h := New(Options{
+			SetupToken:     testSetupToken,
 			Logger:         log,
 			Store:          NewMemStore(),
 			Hub:            hub,
