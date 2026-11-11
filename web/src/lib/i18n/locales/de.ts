@@ -442,6 +442,7 @@ export const de: Messages = {
 	'monitorDetail.badgeRevokeBody':
 		'Die Badge-URLs funktionieren sofort nicht mehr. Alles, was sie einbettet, zeigt ein defektes Bild.',
 	'monitorDetail.badgeRevoked': 'Badge widerrufen',
+	'monitorDetail.chartError': 'Das Antwortzeit-Diagramm konnte nicht geladen werden.',
 	'monitorDetail.badgeRevokeError': 'Das Badge konnte nicht widerrufen werden.',
 	'monitorDetail.badgeStatusLabel': 'Status-Badge',
 	'monitorDetail.badgeUptimeLabel': 'Verfügbarkeits-Badge',

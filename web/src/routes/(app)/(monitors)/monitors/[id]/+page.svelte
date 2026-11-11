@@ -52,6 +52,14 @@
 	// component scope so both the mount path and a later retry can install it and
 	// the destroy cleanup can tear it down.
 	let liveOff: (() => void) | undefined;
+	// False once the component is destroyed. The mount path awaits two requests
+	// before it subscribes, so leaving the page while they were in flight used to
+	// install the live subscription AFTER the cleanup had already run — a topic
+	// and a handler nobody would ever release, writing into a dead component.
+	let alive = true;
+	// Identifies the newest chart request, so a slower one for a range the user
+	// has already left cannot overwrite the chart for the range now selected.
+	let chartSeq = 0;
 
 	// Embeddable SVG badge. The Monitor resource carries no badge field, so the
 	// token is unknown until minted (create is idempotent server-side, returning a
@@ -183,6 +191,7 @@
 	// Subscribe to this monitor's live topic for status/latency. Installed once,
 	// after the detail is known to exist.
 	function startLive() {
+		if (!alive || liveOff) return;
 		const topic = `monitor:${id}`;
 		const offTopic = ws.subscribe(topic);
 		const offMsg = ws.on((env: WsEnvelope) => {
@@ -202,7 +211,9 @@
 		// Frames missed while offline never replay, so pull the detail and its
 		// event log back from REST after a reconnect to resync.
 		const offReconnect = ws.onReconnect(() => {
-			refresh();
+			// Best effort: the live frames resume either way, and the next
+			// reconnect or a reload tries again.
+			refresh().catch(() => {});
 			loadChart();
 		});
 		liveOff = () => {
@@ -219,7 +230,7 @@
 			await loadChart();
 			// Only ever installed once: a retry runs solely after an initial
 			// failure, where `startLive` never got to run.
-			if (!liveOff) startLive();
+			startLive();
 		}
 	}
 
@@ -229,15 +240,24 @@
 			await loadChart();
 			startLive();
 		})();
-		return () => liveOff?.();
+		return () => {
+			alive = false;
+			liveOff?.();
+		};
 	});
 
 	async function loadChart() {
+		const seq = ++chartSeq;
 		loadingChart = true;
 		try {
-			heartbeats = await api.heartbeats(id, range);
+			const beats = await api.heartbeats(id, range);
+			if (seq === chartSeq) heartbeats = beats;
+		} catch {
+			// The rest of the page is still correct; the chart keeps what it
+			// showed rather than taking the view down with an unhandled rejection.
+			if (seq === chartSeq) toast.error(t('monitorDetail.chartError'));
 		} finally {
-			loadingChart = false;
+			if (seq === chartSeq) loadingChart = false;
 		}
 	}
 
@@ -274,6 +294,8 @@
 			monitor = monitors.get(id) ?? monitor;
 			toast.info(t('monitorDetail.checkTriggered'));
 			await loadChart();
+		} catch (e) {
+			toast.error(problemMessage(e) ?? t('common.error'));
 		} finally {
 			busy = false;
 		}
@@ -284,6 +306,8 @@
 			if (monitor?.active) await monitors.pause(id);
 			else await monitors.resume(id);
 			monitor = monitors.get(id) ?? monitor;
+		} catch (e) {
+			toast.error(problemMessage(e) ?? t('common.error'));
 		} finally {
 			busy = false;
 		}
@@ -294,6 +318,8 @@
 			await monitors.delete(id);
 			toast.success(t('monitorDetail.deleted'));
 			await goto('/dashboard');
+		} catch (e) {
+			toast.error(problemMessage(e) ?? t('common.error'));
 		} finally {
 			busy = false;
 		}
