@@ -42,9 +42,52 @@ func (s *server) handleExport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	nameByID := make(map[int64]string, len(monitors))
-	bundle := importexport.Bundle{Version: importexport.BundleVersion, ExportedAt: s.now().UTC().Format(time.RFC3339)}
+	ids := make([]int64, 0, len(monitors))
 	for _, m := range monitors {
 		nameByID[m.ID] = m.Name
+		ids = append(ids, m.ID)
+	}
+	bundle := importexport.Bundle{Version: importexport.BundleVersion, ExportedAt: s.now().UTC().Format(time.RFC3339)}
+
+	// A monitor's tags, channels, parent and folder are part of its
+	// configuration. Leaving them out made a restore come back with monitors
+	// that alert nobody, and the import could not even warn about it.
+	links, err := s.store.MonitorLinks(ctx, ids)
+	if err != nil {
+		writeProblemDetail(w, http.StatusInternalServerError, "list monitor links")
+		return
+	}
+	tags, err := s.store.ListTags(ctx)
+	if err != nil {
+		writeProblemDetail(w, http.StatusInternalServerError, "list tags")
+		return
+	}
+	tagName := make(map[int64]string, len(tags))
+	for _, t := range tags {
+		tagName[t.ID] = t.Name
+		bundle.Tags = append(bundle.Tags, importexport.TagSpec{Name: t.Name, Color: t.Color})
+	}
+	notifs, err := s.store.ListNotifications(ctx)
+	if err != nil {
+		writeProblemDetail(w, http.StatusInternalServerError, "list notifications")
+		return
+	}
+	notifName := make(map[int64]string, len(notifs))
+	for _, n := range notifs {
+		notifName[n.ID] = n.Name
+	}
+	groups, err := s.store.ListMonitorGroups(ctx)
+	if err != nil {
+		writeProblemDetail(w, http.StatusInternalServerError, "list monitor groups")
+		return
+	}
+	groupName := make(map[int64]string, len(groups))
+	for _, g := range groups {
+		groupName[g.ID] = g.Name
+		bundle.MonitorGroups = append(bundle.MonitorGroups, importexport.MonitorGroupSpec{Name: g.Name, SortOrder: g.SortOrder})
+	}
+
+	for _, m := range monitors {
 		spec := importexport.MonitorSpec{
 			Name:            m.Name,
 			Type:            m.Type,
@@ -63,23 +106,25 @@ func (s *server) handleExport(w http.ResponseWriter, r *http.Request) {
 			t := int(m.Timeout / time.Second)
 			spec.Timeout = &t
 		}
+		for _, id := range links[m.ID].TagIDs {
+			if name, ok := tagName[id]; ok {
+				spec.Tags = append(spec.Tags, name)
+			}
+		}
+		for _, id := range links[m.ID].NotificationIDs {
+			if name, ok := notifName[id]; ok {
+				spec.Notifications = append(spec.Notifications, name)
+			}
+		}
+		if m.ParentID != nil {
+			spec.Parent = nameByID[*m.ParentID]
+		}
+		if m.GroupID != nil {
+			spec.Group = groupName[*m.GroupID]
+		}
 		bundle.Monitors = append(bundle.Monitors, spec)
 	}
 
-	tags, err := s.store.ListTags(ctx)
-	if err != nil {
-		writeProblemDetail(w, http.StatusInternalServerError, "list tags")
-		return
-	}
-	for _, t := range tags {
-		bundle.Tags = append(bundle.Tags, importexport.TagSpec{Name: t.Name, Color: t.Color})
-	}
-
-	notifs, err := s.store.ListNotifications(ctx)
-	if err != nil {
-		writeProblemDetail(w, http.StatusInternalServerError, "list notifications")
-		return
-	}
 	for _, n := range notifs {
 		bundle.Notifications = append(bundle.Notifications, importexport.NotificationSpec{
 			Name: n.Name,
@@ -182,7 +227,7 @@ func (s *server) handleImport(w http.ResponseWriter, r *http.Request) {
 			bundle.Version, importexport.BundleVersion))
 		return
 	}
-	res := s.applyBundle(r, bundle.Monitors, bundle.Notifications, bundle.Tags, bundle.StatusPages)
+	res := s.applyBundle(r, bundle.Monitors, bundle.Notifications, bundle.Tags, bundle.MonitorGroups, bundle.StatusPages)
 	p := principalFrom(r)
 	s.audit(r.Context(), &p.userID, "config.import", "", nil, clientIP(r), nil)
 	writeJSON(w, http.StatusOK, res)
@@ -212,7 +257,7 @@ func (s *server) handleImportKuma(w http.ResponseWriter, r *http.Request) {
 		writeProblemDetail(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	res := s.applyBundle(r, mapped.Monitors, mapped.Notifications, mapped.Tags, nil)
+	res := s.applyBundle(r, mapped.Monitors, mapped.Notifications, mapped.Tags, nil, nil)
 	res.Warnings = append(res.Warnings, mapped.Warnings...)
 	p := principalFrom(r)
 	s.audit(r.Context(), &p.userID, "config.import_kuma", "", nil, clientIP(r), nil)
@@ -222,7 +267,8 @@ func (s *server) handleImportKuma(w http.ResponseWriter, r *http.Request) {
 // applyBundle creates the given specs, skipping and reporting any that fail
 // (e.g. name/slug conflicts, unknown types). It resolves status-page monitor
 // references by name against the monitors created in this call.
-func (s *server) applyBundle(r *http.Request, monitors []importexport.MonitorSpec, notifs []importexport.NotificationSpec, tags []importexport.TagSpec, pages []importexport.StatusPageSpec) importResult {
+func (s *server) applyBundle(r *http.Request, monitors []importexport.MonitorSpec, notifs []importexport.NotificationSpec,
+	tags []importexport.TagSpec, groups []importexport.MonitorGroupSpec, pages []importexport.StatusPageSpec) importResult {
 	ctx := r.Context()
 	var res importResult
 
@@ -298,9 +344,32 @@ func (s *server) applyBundle(r *http.Request, monitors []importexport.MonitorSpe
 		res.Notifications++
 	}
 
+	// Folders, reused by name like tags.
+	groupIDByName := map[string]int64{}
+	if existing, err := s.store.ListMonitorGroups(ctx); err == nil {
+		for _, g := range existing {
+			groupIDByName[g.Name] = g.ID
+		}
+	}
+	for _, g := range groups {
+		if _, ok := groupIDByName[g.Name]; ok {
+			continue
+		}
+		if err := checkLength("name", g.Name, maxNameRunes); g.Name == "" || err != nil {
+			res.Warnings = append(res.Warnings, "monitor group "+g.Name+": invalid name, skipped")
+			continue
+		}
+		created, err := s.store.CreateMonitorGroup(ctx, g.Name, g.SortOrder)
+		if err != nil {
+			res.Warnings = append(res.Warnings, "monitor group "+g.Name+": "+err.Error())
+			continue
+		}
+		groupIDByName[created.Name] = created.ID
+	}
+
 	principal := principalFrom(r)
 	idByName := map[string]int64{}
-	for _, m := range monitors {
+	for _, m := range parentsFirst(monitors) {
 		cfg := m.Config
 		if len(cfg) == 0 {
 			cfg = json.RawMessage(`{}`)
@@ -360,6 +429,25 @@ func (s *server) applyBundle(r *http.Request, monitors []importexport.MonitorSpe
 			}
 			notifIDs = append(notifIDs, id)
 		}
+		// parentsFirst has put a parent from this bundle ahead of its children,
+		// so it is in idByName by now unless it was skipped.
+		var parentID, groupID *int64
+		if m.Parent != "" {
+			if id, ok := idByName[m.Parent]; ok {
+				parentID = &id
+			} else {
+				res.Warnings = append(res.Warnings,
+					"monitor "+m.Name+": parent "+m.Parent+" was not imported, left without a parent")
+			}
+		}
+		if m.Group != "" {
+			if id, ok := groupIDByName[m.Group]; ok {
+				groupID = &id
+			} else {
+				res.Warnings = append(res.Warnings,
+					"monitor "+m.Name+": unknown monitor group "+m.Group+", left unfiled")
+			}
+		}
 		active := m.Active
 		req := monitorRequest{
 			Name:            m.Name,
@@ -375,6 +463,8 @@ func (s *server) applyBundle(r *http.Request, monitors []importexport.MonitorSpe
 			Active:          &active,
 			Description:     m.Description,
 			LinkURL:         m.LinkURL,
+			ParentID:        parentID,
+			GroupID:         groupID,
 			TagIDs:          tagIDs,
 			NotificationIDs: notifIDs,
 		}
@@ -384,6 +474,10 @@ func (s *server) applyBundle(r *http.Request, monitors []importexport.MonitorSpe
 		// link_url guard, so an import could store a monitor the scheduler cannot
 		// run and a link carrying a javascript: payload.
 		if err := s.validateMonitor(req); err != nil {
+			res.Warnings = append(res.Warnings, "monitor "+m.Name+": "+err.Error())
+			continue
+		}
+		if err := s.validateMonitorRelations(ctx, 0, req); err != nil {
 			res.Warnings = append(res.Warnings, "monitor "+m.Name+": "+err.Error())
 			continue
 		}
@@ -490,6 +584,41 @@ func pageFromSpec(p importexport.StatusPageSpec, idByName map[string]int64) (Sta
 		}
 	}
 	return page, warnings
+}
+
+// parentsFirst orders monitor specs so that every monitor whose parent is in the
+// same list comes after that parent, keeping the bundle's order otherwise.
+//
+// A parent is set when the child is created, and it has to exist by then. The
+// export lists monitors by id, and a child created before its parent is listed
+// first. Specs whose parent chain loops are appended at the end; their parent
+// is then not yet created and the import reports it.
+func parentsFirst(specs []importexport.MonitorSpec) []importexport.MonitorSpec {
+	inBundle := make(map[string]bool, len(specs))
+	for _, m := range specs {
+		inBundle[m.Name] = true
+	}
+	placed := make(map[string]bool, len(specs))
+	out := make([]importexport.MonitorSpec, 0, len(specs))
+	done := make([]bool, len(specs))
+	for progress := true; progress; {
+		progress = false
+		for i, m := range specs {
+			if done[i] || (m.Parent != "" && inBundle[m.Parent] && !placed[m.Parent]) {
+				continue
+			}
+			out = append(out, m)
+			placed[m.Name] = true
+			done[i] = true
+			progress = true
+		}
+	}
+	for i, m := range specs {
+		if !done[i] {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // configEncrypted reports whether cfg is a sealed secrets envelope
