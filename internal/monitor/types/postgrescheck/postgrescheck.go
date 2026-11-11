@@ -11,9 +11,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Ariazonaa/statwarden/internal/domain"
 	"github.com/Ariazonaa/statwarden/internal/monitor/registry"
@@ -182,9 +184,29 @@ func livePostgres(ctx context.Context, c Config) (probeResult, error) {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return probeResult{}, nil
 		}
-		return probeResult{}, err
+		return probeResult{}, queryError(err)
 	}
 	return probeResult{value: stringify(value), hasValue: true}, nil
+}
+
+// queryError reports a failed assertion query without the server's text.
+//
+// PostgreSQL quotes the data it choked on — a failed cast names the value, a
+// constraint error the whole row — and the message is served to every user
+// who can read heartbeats. Same policy as the assertion itself (see
+// registry.Checker.Check): the SQLSTATE says what kind of failure it was,
+// the operator's own query says where, and neither echoes the row. Network
+// and context errors carry no row data and stay readable.
+func queryError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return fmt.Errorf("assertion query failed (SQLSTATE %s)", pgErr.Code)
+	}
+	var netErr net.Error
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.As(err, &netErr) {
+		return fmt.Errorf("assertion query failed: %w", err)
+	}
+	return errors.New("assertion query failed")
 }
 
 // stringify renders a scanned column value as a string for comparison.

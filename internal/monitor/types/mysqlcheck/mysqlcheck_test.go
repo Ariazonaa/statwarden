@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-sql-driver/mysql"
+
 	"github.com/Ariazonaa/statwarden/internal/domain"
 	"github.com/Ariazonaa/statwarden/internal/monitor/registry"
 )
@@ -101,5 +103,25 @@ func TestAFailedAssertionDoesNotEchoTheObservedValue(t *testing.T) {
 	}
 	if !strings.Contains(msg, "1") {
 		t.Errorf("the message dropped the operator's own expectation: %q", msg)
+	}
+}
+
+// The server's error text for a failed assertion query quotes the data it
+// choked on ("Truncated incorrect DOUBLE value: '<row data>'"), and the message
+// is readable by every user. The error number and SQLSTATE say what failed.
+func TestAFailedAssertionQueryDoesNotEchoTheServerError(t *testing.T) {
+	const secret = "s3cr3t-row-from-an-internal-database"
+	err := queryError(&mysql.MySQLError{
+		Number: 1292, SQLState: [5]byte{'2', '2', '0', '0', '7'},
+		Message: "Truncated incorrect DOUBLE value: '" + secret + "'",
+	})
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("the server's error text reached the message: %q", err)
+	}
+	if !strings.Contains(err.Error(), "1292") || !strings.Contains(err.Error(), "22007") {
+		t.Errorf("message %q does not carry the error number and SQLSTATE", err)
+	}
+	if err := queryError(context.DeadlineExceeded); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("a timeout lost its cause: %v", err)
 	}
 }
