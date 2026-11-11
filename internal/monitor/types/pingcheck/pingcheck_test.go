@@ -104,3 +104,41 @@ func TestCheckRejectsInvalidConfig(t *testing.T) {
 		t.Fatal("Check must reject a negative count")
 	}
 }
+
+// pro-bing sends one echo per Interval (1s by default) and stops at Timeout, so
+// with the default four probes and a monitor timeout of 3s the last request was
+// never sent or never answered and a healthy host showed 25% loss. The probes
+// are spread so that all of them, and the last reply, fit the time available.
+func TestProbeIntervalFitsEveryProbeIntoTheTimeout(t *testing.T) {
+	tests := []struct {
+		count     int
+		remaining time.Duration
+		want      time.Duration
+	}{
+		{4, 10 * time.Second, time.Second}, // plenty of time: pro-bing's default
+		{4, 3 * time.Second, 600 * time.Millisecond},
+		{100, 10 * time.Second, 10 * time.Second / 101},
+		{1, 0, time.Second}, // no deadline: default
+	}
+	for _, tt := range tests {
+		got := probeInterval(tt.count, tt.remaining)
+		if got != tt.want {
+			t.Errorf("probeInterval(%d, %s) = %s, want %s", tt.count, tt.remaining, got, tt.want)
+		}
+		if tt.remaining > 0 && got*time.Duration(tt.count+1) > tt.remaining {
+			t.Errorf("probeInterval(%d, %s) = %s leaves no time for the last reply", tt.count, tt.remaining, got)
+		}
+	}
+}
+
+// The target is resolved under the check's context. pro-bing resolves through
+// net.ResolveIPAddr, which takes none, so a hanging resolver held the check
+// past its timeout — and past the engine's shutdown.
+func TestRunPingResolvesUnderTheContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := runPing(ctx, Config{Host: "host.example.test"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("runPing with a cancelled context = %v, want context.Canceled", err)
+	}
+}
