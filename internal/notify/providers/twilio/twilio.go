@@ -5,13 +5,17 @@ package twilio
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Ariazonaa/statwarden/internal/domain"
@@ -50,12 +54,13 @@ type Config struct {
 type Notifier struct {
 	client  *http.Client
 	baseURL string
+	sent    *sentLog
 }
 
 // New builds a Twilio Notifier with a timeout-bounded HTTP client pointed at
 // the public REST API.
 func New() *Notifier {
-	return &Notifier{client: httpx.NotifierClient(httpTimeout), baseURL: defaultBaseURL}
+	return &Notifier{client: httpx.NotifierClient(httpTimeout), baseURL: defaultBaseURL, sent: newSentLog()}
 }
 
 // Type implements registry.Notifier.
@@ -88,7 +93,14 @@ func (*Notifier) Validate(cfg json.RawMessage) error {
 }
 
 // Send implements registry.Notifier. Twilio sends one message per recipient,
-// so a delivery is a POST per destination; the first failure aborts.
+// so a delivery is a POST per destination.
+//
+// Every recipient is tried. Returning on the first failure meant one mistyped
+// number at the top of the list silenced everyone below it. The failures are
+// joined into the returned error, so the delivery still counts as failed and is
+// retried — and a retry skips the recipients this alert already reached (see
+// sentLog), because Twilio has no idempotency key that would let the API
+// discard the duplicate for us.
 func (n *Notifier) Send(ctx context.Context, cfg json.RawMessage, event domain.NotificationEvent) error {
 	c, err := parse(cfg)
 	if err != nil {
@@ -99,12 +111,79 @@ func (n *Notifier) Send(ctx context.Context, cfg json.RawMessage, event domain.N
 		strings.TrimRight(n.baseURL, "/"), url.PathEscape(c.AccountSID))
 	message := buildMessage(event)
 
+	var errs []error
 	for _, to := range c.To {
+		key := sentKey(c, to, message, event)
+		if n.sent.has(key) {
+			continue
+		}
 		if err := n.sendOne(ctx, endpoint, c, to, message); err != nil {
-			return err
+			errs = append(errs, err)
+			continue
+		}
+		n.sent.add(key)
+	}
+	return errors.Join(errs...)
+}
+
+// sentKey identifies one alert to one recipient: the same event re-sent by a
+// retry produces the same key, the next alert for the monitor does not.
+func sentKey(c Config, to, message string, ev domain.NotificationEvent) string {
+	h := sha256.New()
+	for _, part := range []string{
+		c.AccountSID, c.From, to, message, string(ev.Kind),
+		strconv.FormatInt(ev.MonitorID, 10), strconv.FormatInt(ev.At.UnixNano(), 10),
+	} {
+		h.Write([]byte(part))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// sentTTL is how long a delivered alert is remembered. It covers the
+// dispatcher's in-process retries and the outbox's re-runs of a failed event,
+// which stop well inside an hour; after that a repeat is a new alert.
+const sentTTL = time.Hour
+
+// sentCap bounds the log. Reached only by a very large recipient list under a
+// storm of alerts; forgetting early then costs at most a duplicate SMS.
+const sentCap = 10000
+
+// sentLog remembers which recipient has already been sent which alert. It is
+// in memory on purpose: a duplicate after a restart is a nuisance, while a
+// skipped alert would be the failure the whole provider exists to prevent.
+type sentLog struct {
+	mu  sync.Mutex
+	now func() time.Time
+	at  map[string]time.Time
+}
+
+func newSentLog() *sentLog {
+	return &sentLog{now: time.Now, at: map[string]time.Time{}}
+}
+
+func (s *sentLog) has(key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	at, ok := s.at[key]
+	return ok && s.now().Sub(at) < sentTTL
+}
+
+func (s *sentLog) add(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	if len(s.at) >= sentCap {
+		for k, at := range s.at {
+			if now.Sub(at) >= sentTTL {
+				delete(s.at, k)
+			}
+		}
+		if len(s.at) >= sentCap {
+			s.at = map[string]time.Time{}
 		}
 	}
-	return nil
+	s.at[key] = now
 }
 
 func (n *Notifier) sendOne(ctx context.Context, endpoint string, c Config, to, message string) error {
@@ -147,11 +226,12 @@ func buildMessage(event domain.NotificationEvent) string {
 		b.WriteString("\n")
 		b.WriteString(event.Body)
 	}
-	msg := b.String()
-	if len(msg) > maxSMSLen {
-		msg = msg[:maxSMSLen-1] + "…"
+	// Counted in characters: a byte offset can land inside a multi-byte
+	// character and send invalid UTF-8.
+	if runes := []rune(b.String()); len(runes) > maxSMSLen {
+		return string(runes[:maxSMSLen-1]) + "…"
 	}
-	return msg
+	return b.String()
 }
 
 func parse(cfg json.RawMessage) (Config, error) {
