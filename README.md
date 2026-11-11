@@ -68,7 +68,14 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Open http://localhost:3001 and create the first admin account. Production notes — reverse proxies, backups, TLS, bare-metal systemd — are in [docs/deployment.md](./docs/deployment.md).
+Open http://localhost:3001 and create the first admin account. The setup page asks for a one-time
+setup token, which the server prints in its log while no account exists:
+
+```sh
+docker compose logs statwarden | grep "setup token"
+```
+
+Production notes — reverse proxies, backups, TLS, bare-metal systemd — are in [docs/deployment.md](./docs/deployment.md).
 
 ## Stack
 
