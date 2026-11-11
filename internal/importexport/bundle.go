@@ -9,7 +9,8 @@ import "encoding/json"
 
 // BundleVersion is the current export schema version.
 //
-// 2 added the status-page protection flag and layout. It was bumped rather
+// 2 added the status-page protection flag and layout, and monitor tags,
+// channels, parent and folder. It was bumped rather
 // than left additive on purpose: a version-1 reader ignores has_password and
 // would import a protected page as public, so an older server has to refuse
 // these bundles. Version-1 bundles are still read.
@@ -23,6 +24,14 @@ type Bundle struct {
 	Notifications []NotificationSpec `json:"notifications"`
 	Tags          []TagSpec          `json:"tags"`
 	StatusPages   []StatusPageSpec   `json:"status_pages"`
+	// MonitorGroups are the organisational folders MonitorSpec.Group names.
+	MonitorGroups []MonitorGroupSpec `json:"monitor_groups,omitempty"`
+}
+
+// MonitorGroupSpec is a portable monitor folder.
+type MonitorGroupSpec struct {
+	Name      string `json:"name"`
+	SortOrder int    `json:"sort_order"`
 }
 
 // MonitorSpec is a portable monitor definition.
@@ -47,6 +56,10 @@ type MonitorSpec struct {
 	// resolves them to ids and wires them up (Kuma import carries the source
 	// monitor↔notification assignment).
 	Notifications []string `json:"notifications,omitempty"`
+	// Parent names the monitor this one depends on, and Group the folder it is
+	// filed under. Both are names, resolved on import like Tags.
+	Parent string `json:"parent,omitempty"`
+	Group  string `json:"group,omitempty"`
 	// Unmapped lists source fields that could not be translated (Kuma import).
 	Unmapped []string `json:"unmapped,omitempty"`
 }
