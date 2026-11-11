@@ -308,8 +308,17 @@ func WriteSLAPDF(w io.Writer, r Range, rows []SLARow) error {
 // clipToWidth trims s (already cp1252-encoded) to fit maxW mm in the current
 // font, appending an ellipsis when it had to cut. It keeps long monitor names
 // from spilling into the next column.
+//
+// The trim loop re-measures the whole remainder per byte, so it is cut to
+// maxClipBytes first: unbounded, a long stored name made it quadratic and a
+// single 1 MiB name cost minutes per report. cp1252 is one byte per glyph and
+// the narrowest Helvetica glyph is about 0.19 em, so no table cell this file
+// draws holds anywhere near that many.
 func clipToWidth(pdf *fpdf.Fpdf, s string, maxW float64) string {
-	if pdf.GetStringWidth(s) <= maxW {
+	const maxClipBytes = 512
+	if len(s) > maxClipBytes {
+		s = s[:maxClipBytes]
+	} else if pdf.GetStringWidth(s) <= maxW {
 		return s
 	}
 	const ell = "…"

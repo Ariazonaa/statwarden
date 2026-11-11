@@ -47,6 +47,10 @@ func (s *server) handleCreateTag(w http.ResponseWriter, r *http.Request) {
 		writeProblemDetail(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	if err := checkLength("name", req.Name, maxTagNameRunes); err != nil {
+		writeProblemDetail(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	color, ok := resolveTagColor(req.Color)
 	if !ok {
 		writeProblemDetail(w, http.StatusBadRequest, "color must be a hex colour such as #0ea5e9")
@@ -73,6 +77,10 @@ func (s *server) handleUpdateTag(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Name == "" {
 		writeProblemDetail(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if err := checkLength("name", req.Name, maxTagNameRunes); err != nil {
+		writeProblemDetail(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	color, ok := resolveTagColor(req.Color)

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Ariazonaa/statwarden/internal/domain"
 	"github.com/Ariazonaa/statwarden/internal/monitor/engine"
@@ -462,6 +463,24 @@ func (s *server) handleMonitorStatus(w http.ResponseWriter, r *http.Request) {
 // maxRecoveryChecks bounds monitorRequest.RecoveryChecks.
 const maxRecoveryChecks = 100
 
+// Length limits, in runes, for the names and free text that every list, alert,
+// status page and SLA report renders verbatim. Generous for any real label;
+// they exist so that one stored value cannot make each of those pay for
+// megabytes of text.
+const (
+	maxNameRunes        = 200
+	maxTagNameRunes     = 100
+	maxDescriptionRunes = 4000
+)
+
+// checkLength reports a validation error when v is longer than max runes.
+func checkLength(field, v string, max int) error {
+	if utf8.RuneCountInString(v) > max {
+		return validationError(fmt.Sprintf("%s must be at most %d characters", field, max))
+	}
+	return nil
+}
+
 // Ceilings for the remaining numeric monitor fields: a year, in the unit each
 // field is written in, and a retry count no real schedule reaches.
 const (
@@ -475,6 +494,12 @@ const (
 func (s *server) validateMonitor(req monitorRequest) error {
 	if req.Name == "" {
 		return validationError("name is required")
+	}
+	if err := checkLength("name", req.Name, maxNameRunes); err != nil {
+		return err
+	}
+	if err := checkLength("description", req.Description, maxDescriptionRunes); err != nil {
+		return err
 	}
 	checker, ok := s.monReg.Get(req.Type)
 	if !ok {
