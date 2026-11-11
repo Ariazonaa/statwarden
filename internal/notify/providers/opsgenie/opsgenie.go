@@ -1,6 +1,7 @@
 // Package opsgenie delivers notifications through the Atlassian Opsgenie Alert
-// API. A DOWN event creates an alert and the matching UP event closes it,
-// keyed by a stable alias derived from the monitor id. It follows the
+// API. A problem event creates an alert and the matching "back to normal"
+// event closes it, keyed by a stable alias per monitor and event class (see
+// alertFor). It follows the
 // reference webhook provider's shape: implement registry.Notifier,
 // self-register in init(), blank-import from cmd/statwarden.
 package opsgenie
@@ -107,29 +108,37 @@ func (n *Notifier) Send(ctx context.Context, cfg json.RawMessage, ev domain.Noti
 		return err
 	}
 
-	alias := aliasFor(ev)
-	base := n.base(c)
-
-	var (
-		endpoint string
-		body     any
-	)
-	if ev.Kind == domain.EventKindUp {
-		endpoint = fmt.Sprintf("%s/v2/alerts/%s/close?identifierType=alias", base, url.PathEscape(alias))
-		body = closeAlertRequest{Source: "statwarden", Note: ev.Title}
-	} else {
-		endpoint = base + "/v2/alerts"
-		body = createAlertRequest{
-			Message:     message(ev),
-			Alias:       alias,
-			Description: ev.Body,
-			Priority:    priority(ev),
-			Source:      "statwarden",
-			Tags:        []string{"statwarden", string(ev.Kind)},
-			Details:     details(ev),
-		}
+	alias, closes := alertFor(ev)
+	if closes {
+		return n.closeAlert(ctx, c, ev, alias)
 	}
+	if err := n.post(ctx, c, n.base(c)+"/v2/alerts", createAlertRequest{
+		Message:     message(ev),
+		Alias:       alias,
+		Description: ev.Body,
+		Priority:    priority(ev),
+		Source:      "statwarden",
+		Tags:        []string{"statwarden", string(ev.Kind)},
+		Details:     details(ev),
+	}); err != nil {
+		return err
+	}
+	if ev.Kind == domain.EventKindTest {
+		// A test proves the key and region work; it is not an alert anybody
+		// should have to close by hand.
+		return n.closeAlert(ctx, c, ev, alias)
+	}
+	return nil
+}
 
+// closeAlert closes the alert with the given alias.
+func (n *Notifier) closeAlert(ctx context.Context, c Config, ev domain.NotificationEvent, alias string) error {
+	endpoint := fmt.Sprintf("%s/v2/alerts/%s/close?identifierType=alias", n.base(c), url.PathEscape(alias))
+	return n.post(ctx, c, endpoint, closeAlertRequest{Source: "statwarden", Note: ev.Title})
+}
+
+// post sends one Alert API request.
+func (n *Notifier) post(ctx context.Context, c Config, endpoint string, body any) error {
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("opsgenie: marshal payload: %w", err)
@@ -171,9 +180,48 @@ func (n *Notifier) base(c Config) string {
 	return baseURLUS
 }
 
-// aliasFor ties the create and its later close to the same alert.
-func aliasFor(ev domain.NotificationEvent) string {
-	return fmt.Sprintf("statwarden-monitor-%d", ev.MonitorID)
+// alertFor returns the alias an event belongs to and whether it closes that
+// alert rather than creating it.
+//
+// Each class of problem — an outage, slow responses, flapping, a certificate,
+// a maintenance window — is its own alert, and the event that says the problem
+// is over closes exactly that alias. They all used to share
+// statwarden-monitor-<id> with only an UP closing it, so a certificate warning
+// merged into the outage alert and nothing but an outage was ever closed.
+//
+// The outage keeps the bare alias, so an alert created before this change is
+// still closed by the next UP; reminders and escalations are DOWN events and
+// de-duplicate into the open alert. A certificate warning has no "renewed"
+// event and stays open until somebody acts on it. A test or digest has no
+// monitor and gets an alias of its own per send.
+func alertFor(ev domain.NotificationEvent) (alias string, closes bool) {
+	monitor := fmt.Sprintf("statwarden-monitor-%d", ev.MonitorID)
+	switch ev.Kind {
+	case domain.EventKindDown:
+		return monitor, false
+	case domain.EventKindUp:
+		return monitor, true
+	case domain.EventKindLatencyAnomaly:
+		return monitor + "-latency", false
+	case domain.EventKindLatencyNormal:
+		return monitor + "-latency", true
+	case domain.EventKindFlapping:
+		return monitor + "-flapping", false
+	case domain.EventKindFlappingStable:
+		return monitor + "-flapping", true
+	case domain.EventKindCertExpiry:
+		return monitor + "-cert", false
+	case domain.EventKindMaintenanceStart:
+		return monitor + "-maintenance", false
+	case domain.EventKindMaintenanceEnd:
+		return monitor + "-maintenance", true
+	default:
+		at := ev.At
+		if at.IsZero() {
+			at = time.Now()
+		}
+		return fmt.Sprintf("statwarden-%s-%d", ev.Kind, at.UnixNano()), false
+	}
 }
 
 func message(ev domain.NotificationEvent) string {
