@@ -39,6 +39,10 @@ type setupRequest struct {
 // handleSetup creates the initial admin account. It only works while no users
 // exist, so it cannot be used to add accounts later.
 func (s *server) handleSetup(w http.ResponseWriter, r *http.Request) {
+	// Setup issues a session, so it is a login-CSRF target like handleLogin.
+	if !requireJSONContentType(w, r) {
+		return
+	}
 	n, err := s.store.CountUsers(r.Context())
 	if storeError(w, err) {
 		return
@@ -110,6 +114,9 @@ type loginRequest struct {
 func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !s.loginLimiter.allow("login:" + rateLimitAddr(clientIP(r))) {
 		writeProblemDetail(w, http.StatusTooManyRequests, "too many login attempts, slow down")
+		return
+	}
+	if !requireJSONContentType(w, r) {
 		return
 	}
 	var req loginRequest
