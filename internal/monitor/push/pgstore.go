@@ -214,7 +214,8 @@ func (s *PgStore) TripDown(ctx context.Context, hb domain.Heartbeat, notAfter ti
 func (s *PgStore) ListPushMonitors(ctx context.Context) ([]PushMonitor, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+monitorColumns+`,
-		       (SELECT max(checked_at) FROM heartbeats h WHERE h.monitor_id = monitors.id) AS last_seen
+		       (SELECT max(checked_at) FROM heartbeats h WHERE h.monitor_id = monitors.id) AS last_seen,
+		       updated_at
 		FROM monitors
 		WHERE type = 'push' AND active = true`)
 	if err != nil {
@@ -230,11 +231,12 @@ func (s *PgStore) ListPushMonitors(ctx context.Context) ([]PushMonitor, error) {
 			parent  pgtype.Int8
 			token   pgtype.Text
 			last    pgtype.Timestamptz
+			updated time.Time
 			ivl, ri int32
 			rim     int32
 		)
 		if err := rows.Scan(&m.ID, &m.Name, &m.Type, &cfg, &ivl, &timeout, &m.MaxRetries,
-			&ri, &rim, &m.UpsideDown, &m.Active, &m.Status, &parent, &token, &m.Description, &m.LinkURL, &last); err != nil {
+			&ri, &rim, &m.UpsideDown, &m.Active, &m.Status, &parent, &token, &m.Description, &m.LinkURL, &last, &updated); err != nil {
 			return nil, err
 		}
 		// Unsealed here, not in scanMonitor: this is the slice the watchdog
@@ -254,7 +256,7 @@ func (s *PgStore) ListPushMonitors(ctx context.Context) ([]PushMonitor, error) {
 		if token.Valid {
 			m.PushToken = token.String
 		}
-		out = append(out, PushMonitor{Monitor: m, LastSeen: last.Time, HasHeartbeat: last.Valid})
+		out = append(out, PushMonitor{Monitor: m, LastSeen: last.Time, HasHeartbeat: last.Valid, StatusSince: updated})
 	}
 	return out, rows.Err()
 }

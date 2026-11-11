@@ -33,6 +33,13 @@ type PushMonitor struct {
 	// unknown here, so a never-seen monitor is left untouched until its first
 	// heartbeat (matches Uptime-Kuma semantics).
 	HasHeartbeat bool
+	// StatusSince is when the monitor row was last written (updated_at). It
+	// matters only for a PENDING monitor: push beats write up or down, so a
+	// push monitor with heartbeats is PENDING only because it was just resumed,
+	// and its deadline has to run from then rather than from a beat that is as
+	// old as the pause. Any other edit also moves updated_at; while PENDING
+	// that delays a trip by at most one window, never prevents it.
+	StatusSince time.Time
 }
 
 // Store is the persistence surface push needs. PgStore implements it against
@@ -258,7 +265,11 @@ func (w *Watchdog) Sweep(ctx context.Context) (int, error) {
 		if !pm.HasHeartbeat || pm.Monitor.Status == domain.StatusDown {
 			continue
 		}
-		deadline, ok := pushcheck.Deadline(pm.Monitor.Config, pm.LastSeen)
+		since := pm.LastSeen
+		if pm.Monitor.Status == domain.StatusPending && pm.StatusSince.After(since) {
+			since = pm.StatusSince // resumed: see PushMonitor.StatusSince
+		}
+		deadline, ok := pushcheck.Deadline(pm.Monitor.Config, since)
 		if !ok || !now.After(deadline) {
 			continue
 		}
