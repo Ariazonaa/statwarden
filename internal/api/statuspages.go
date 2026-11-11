@@ -74,7 +74,7 @@ func (r statusPageRequest) toPage() (StatusPage, error) {
 		// a PUT that omits the key clear the column and orphan the file on disk,
 		// and would let a client point the public page's <img src> anywhere.
 		AccentColor:   normalizeHexColor(r.AccentColor),
-		CustomDomain:  strings.ToLower(strings.TrimSpace(r.CustomDomain)),
+		CustomDomain:  normalizeCustomDomain(r.CustomDomain),
 		Locale:        strings.TrimSpace(r.Locale),
 		Published:     published,
 		AllowIndexing: indexing,
@@ -176,6 +176,10 @@ func (s *server) handleCreateStatusPage(w http.ResponseWriter, r *http.Request) 
 		writeProblemDetail(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := s.validateCustomDomain(req.CustomDomain); err != nil {
+		writeProblemDetail(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err := validateStatusPageGroups(req.Groups); err != nil {
 		writeProblemDetail(w, http.StatusBadRequest, err.Error())
 		return
@@ -213,6 +217,10 @@ func (s *server) handleUpdateStatusPage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := validateAccentColor(req.AccentColor); err != nil {
+		writeProblemDetail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.validateCustomDomain(req.CustomDomain); err != nil {
 		writeProblemDetail(w, http.StatusBadRequest, err.Error())
 		return
 	}

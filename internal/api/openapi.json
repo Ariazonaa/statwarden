@@ -6142,7 +6142,8 @@
             "type": "string"
           },
           "custom_domain": {
-            "type": "string"
+            "type": "string",
+            "description": "Bare hostname (no scheme, port or path), stored lower-cased; must not be the instance's own hostname. GET / on this host redirects to the page while it is published."
           },
           "locale": {
             "type": "string"
