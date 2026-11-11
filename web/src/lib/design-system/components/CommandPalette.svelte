@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { t } from '$lib/i18n';
 	// Ctrl/Cmd+K command overlay: glass panel, fuzzy-ish filtering,
 	// grouped results, full keyboard navigation.
 	import { fade, scale } from 'svelte/transition';
@@ -139,7 +140,7 @@
 			class="palette ds-glass ds-glass--thick {className}"
 			role="dialog"
 			aria-modal="true"
-			aria-label="Command palette"
+			aria-label={t('ds.commandPalette')}
 			transition:scale={{ start: 0.94, duration: safeDuration(240), easing: backOut }}
 		>
 			<div class="inputrow">
@@ -182,7 +183,7 @@
 				bind:this={listEl}
 				id="{baseId}-list"
 				role="listbox"
-				aria-label="Commands"
+				aria-label={t('ds.commands')}
 			>
 				{#if flat.length === 0}
 					<p class="none">{emptyText.replace('{query}', query)}</p>

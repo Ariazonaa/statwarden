@@ -114,7 +114,7 @@
 			editorOpen = false;
 			toast.success(t('notifications.saved'));
 		} catch (e) {
-			toast.error(problemMessage(e) ?? 'Could not save the notification channel.');
+			toast.error(problemMessage(e) ?? t('notifications.saveError'));
 		} finally {
 			saving = false;
 		}
@@ -127,7 +127,7 @@
 			confirmId = undefined;
 			toast.success(t('notifications.deleted'));
 		} catch (e) {
-			toast.error(problemMessage(e) ?? 'Could not delete the channel.');
+			toast.error(problemMessage(e) ?? t('notifications.deleteError'));
 		}
 	}
 

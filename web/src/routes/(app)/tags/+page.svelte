@@ -58,7 +58,7 @@
 			editorOpen = false;
 			toast.success(t('tags.saved'));
 		} catch (e) {
-			toast.error(problemMessage(e) ?? 'Could not save the tag.');
+			toast.error(problemMessage(e) ?? t('tags.saveError'));
 		} finally {
 			saving = false;
 		}
@@ -70,7 +70,7 @@
 			confirmId = undefined;
 			toast.success(t('tags.deleted'));
 		} catch (e) {
-			toast.error(problemMessage(e) ?? 'Could not delete the tag.');
+			toast.error(problemMessage(e) ?? t('tags.deleteError'));
 		}
 	}
 </script>

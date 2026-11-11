@@ -179,7 +179,7 @@
 				goto('/dashboard').catch(() => {});
 				return false;
 			}
-			loadError = problemMessage(err) ?? 'Could not load this monitor.';
+			loadError = problemMessage(err) ?? t('monitor.loadError');
 			return false;
 		} finally {
 			loading = false;
@@ -333,7 +333,7 @@
 				<PillButton variant="secondary" size="sm" onclick={() => goto('/dashboard')}>
 					{t('common.back')}
 				</PillButton>
-				<PillButton size="sm" onclick={retry}>Retry</PillButton>
+				<PillButton size="sm" onclick={retry}>{t('common.retry')}</PillButton>
 			{/snippet}
 		</EmptyState>
 	</div>

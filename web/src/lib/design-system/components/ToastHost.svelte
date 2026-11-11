@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { t } from '$lib/i18n';
 	// Renders the toast stack (bottom-centre) with springy fly-in and
 	// FLIP re-stacking. Mount once in the app shell.
 	import { fly } from 'svelte/transition';
@@ -20,7 +21,7 @@
 			<span class="msg">{item.message}</span>
 			<button
 				class="close ds-focusable"
-				aria-label="Dismiss notification"
+				aria-label={t('ds.dismissToast')}
 				onclick={() => toast.dismiss(item.id)}
 			>
 				<svg viewBox="0 0 16 16" aria-hidden="true">

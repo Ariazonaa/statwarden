@@ -30,7 +30,7 @@
 				goto('/dashboard').catch(() => {});
 				return;
 			}
-			const msg = problemMessage(err) ?? 'Could not load this monitor.';
+			const msg = problemMessage(err) ?? t('monitor.loadError');
 			loadError = msg;
 			toast.error(msg);
 		}
@@ -51,7 +51,7 @@
 				<PillButton variant="secondary" size="sm" onclick={() => goto('/dashboard')}>
 					{t('common.back')}
 				</PillButton>
-				<PillButton size="sm" onclick={load}>Retry</PillButton>
+				<PillButton size="sm" onclick={load}>{t('common.retry')}</PillButton>
 			{/snippet}
 		</EmptyState>
 	</div>

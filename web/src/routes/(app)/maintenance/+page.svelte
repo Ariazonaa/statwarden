@@ -243,7 +243,7 @@
 			editorOpen = false;
 			toast.success(t('maintenance.saved'));
 		} catch (e) {
-			toast.error(problemMessage(e) ?? 'Could not save the maintenance window.');
+			toast.error(problemMessage(e) ?? t('maintenance.saveError'));
 		} finally {
 			saving = false;
 		}
@@ -255,10 +255,11 @@
 			confirmId = undefined;
 			toast.success(t('maintenance.deleted'));
 		} catch (e) {
-			toast.error(problemMessage(e) ?? 'Could not delete the window.');
+			toast.error(problemMessage(e) ?? t('maintenance.deleteError'));
 		}
 	}
-	const monName = (id: string) => allMonitors.find((m) => m.id === id)?.name ?? 'monitor';
+	const monName = (id: string) =>
+		allMonitors.find((m) => m.id === id)?.name ?? t('maintenance.unknownMonitor');
 </script>
 
 <svelte:head><title>{t('maintenance.pageTitle')}</title></svelte:head>
