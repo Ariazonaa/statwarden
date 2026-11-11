@@ -1,8 +1,9 @@
 // Package webhook is the reference notification provider: a generic HTTP
 // webhook. It POSTs a small JSON document describing the event to a
-// configured URL. Concrete channels (Slack, Discord, Telegram, …) are
-// separate work packages (Gitea #10–#12); this one exists both as a useful
-// universal adapter and as the pattern every other provider follows —
+// configured URL. Concrete channels (Slack, Discord, Telegram, …) are their
+// own packages because each speaks its service's API shape; this one exists
+// both as a universal adapter for anything that accepts a JSON POST and as the
+// pattern every other provider follows —
 // implement registry.Notifier, self-register in init(), blank-import from
 // cmd/statwarden.
 package webhook
