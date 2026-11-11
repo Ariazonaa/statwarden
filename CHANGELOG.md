@@ -5,6 +5,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versioning: 
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-11
+
+### Fixed
+
+- **Push monitors show their heartbeat URL.** After creating a push monitor,
+  its detail page shows the URL and a cron-ready `curl` example. The token is
+  stored only as a hash, so the URL is shown this once; every push monitor
+  also has a "Generate new URL" action, which is the way to get a URL for push
+  monitors created before this release (the old URL stops working).
+- The development mock could not create or edit monitors.
+
 ## [0.2.0] - 2026-11-11
 
 A hardening release. A full review of the code base turned up five high and
@@ -120,6 +131,7 @@ repository was opened; this entry summarises what it contains.
   backups, heartbeat retention, configuration export/import and an Uptime Kuma
   importer.
 
-[Unreleased]: https://github.com/Ariazonaa/statwarden/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Ariazonaa/statwarden/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Ariazonaa/statwarden/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Ariazonaa/statwarden/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Ariazonaa/statwarden/releases/tag/v0.1.0
