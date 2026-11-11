@@ -38,9 +38,17 @@ type statusPageRequest struct {
 	Monitors      []statusPageMonitorInput `json:"monitors"`
 }
 
-// toPage builds a StatusPage from the request. Password hashing is best-effort;
-// on failure the page is saved without a (new) password rather than 500-ing.
-func (r statusPageRequest) toPage() StatusPage {
+// hashPagePassword hashes a page access password. A variable so a test can
+// drive the failure path, which crypto/rand otherwise never takes.
+var hashPagePassword = auth.HashPassword
+
+// toPage builds a StatusPage from the request.
+//
+// A password that cannot be hashed is an error, not a page saved without one.
+// Dropping the error used to store the page unprotected and answer 201, so an
+// operator who asked for a password-protected page published an open one and
+// was told it had worked.
+func (r statusPageRequest) toPage() (StatusPage, error) {
 	published := true
 	if r.Published != nil {
 		published = *r.Published
@@ -93,13 +101,15 @@ func (r statusPageRequest) toPage() StatusPage {
 		})
 	}
 	if r.Password != "" {
-		if hash, err := auth.HashPassword(r.Password); err == nil {
-			p.PasswordHash = hash
+		hash, err := hashPagePassword(r.Password)
+		if err != nil {
+			return StatusPage{}, err
 		}
+		p.PasswordHash = hash
 	} else if r.ClearPassword {
 		p.PasswordHash = passwordClearSentinel
 	}
-	return p
+	return p, nil
 }
 
 // validateStatusPageGroups rejects empty and duplicate group names.
@@ -170,7 +180,12 @@ func (s *server) handleCreateStatusPage(w http.ResponseWriter, r *http.Request) 
 		writeProblemDetail(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	page, err := s.store.CreateStatusPage(r.Context(), req.toPage())
+	in, err := req.toPage()
+	if err != nil {
+		writeProblemDetail(w, http.StatusInternalServerError, "hash password")
+		return
+	}
+	page, err := s.store.CreateStatusPage(r.Context(), in)
 	if storeError(w, err) {
 		return
 	}
@@ -221,7 +236,12 @@ func (s *server) handleUpdateStatusPage(w http.ResponseWriter, r *http.Request) 
 			req.AllowIndexing = &existing.AllowIndexing
 		}
 	}
-	page, err := s.store.UpdateStatusPage(r.Context(), id, req.toPage())
+	in, err := req.toPage()
+	if err != nil {
+		writeProblemDetail(w, http.StatusInternalServerError, "hash password")
+		return
+	}
+	page, err := s.store.UpdateStatusPage(r.Context(), id, in)
 	if storeError(w, err) {
 		return
 	}
