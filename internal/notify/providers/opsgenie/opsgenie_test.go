@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Ariazonaa/statwarden/internal/domain"
 	"github.com/Ariazonaa/statwarden/internal/notify/registry"
@@ -107,6 +109,103 @@ func TestSendClose(t *testing.T) {
 	}
 	if !strings.Contains(gotQuery, "identifierType=alias") {
 		t.Fatalf("query = %q, want identifierType=alias", gotQuery)
+	}
+}
+
+// request is one Alert API call as the test server saw it.
+type request struct {
+	path  string
+	query string
+	alias string // from a create body
+}
+
+func recordingServer(t *testing.T) (*httptest.Server, func() []request) {
+	t.Helper()
+	var mu sync.Mutex
+	var got []request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var create createAlertRequest
+		_ = json.Unmarshal(body, &create)
+		mu.Lock()
+		got = append(got, request{path: r.URL.Path, query: r.URL.RawQuery, alias: create.Alias})
+		mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"result":"Request will be processed"}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() []request {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]request(nil), got...)
+	}
+}
+
+// Each kind of problem is its own alert, closed by its own "back to normal"
+// event. They all used to share statwarden-monitor-<id>, so a certificate or
+// latency alert merged into the outage alert, and only an UP ever closed one.
+func TestEachEventClassHasItsOwnAlert(t *testing.T) {
+	tests := []struct {
+		kind  domain.NotificationEventKind
+		close bool
+		alias string
+	}{
+		{domain.EventKindDown, false, "statwarden-monitor-7"},
+		{domain.EventKindUp, true, "statwarden-monitor-7"},
+		{domain.EventKindLatencyAnomaly, false, "statwarden-monitor-7-latency"},
+		{domain.EventKindLatencyNormal, true, "statwarden-monitor-7-latency"},
+		{domain.EventKindFlapping, false, "statwarden-monitor-7-flapping"},
+		{domain.EventKindFlappingStable, true, "statwarden-monitor-7-flapping"},
+		{domain.EventKindCertExpiry, false, "statwarden-monitor-7-cert"},
+		{domain.EventKindMaintenanceStart, false, "statwarden-monitor-7-maintenance"},
+		{domain.EventKindMaintenanceEnd, true, "statwarden-monitor-7-maintenance"},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.kind), func(t *testing.T) {
+			srv, sent := recordingServer(t)
+			n := New()
+			n.baseURL = srv.URL
+			ev := domain.NotificationEvent{Kind: tt.kind, MonitorID: 7, Title: "t"}
+			if err := n.Send(t.Context(), json.RawMessage(`{"api_key":"k"}`), ev); err != nil {
+				t.Fatalf("Send error = %v", err)
+			}
+			got := sent()
+			if len(got) != 1 {
+				t.Fatalf("requests = %+v, want 1", got)
+			}
+			if tt.close {
+				if got[0].path != "/v2/alerts/"+tt.alias+"/close" || !strings.Contains(got[0].query, "identifierType=alias") {
+					t.Fatalf("request = %+v, want a close of %q by alias", got[0], tt.alias)
+				}
+				return
+			}
+			if got[0].path != "/v2/alerts" || got[0].alias != tt.alias {
+				t.Fatalf("request = %+v, want a create with alias %q", got[0], tt.alias)
+			}
+		})
+	}
+}
+
+// A test send opens an alert of its own and closes it straight away, instead
+// of opening statwarden-monitor-0 and leaving it open.
+func TestATestEventClosesItself(t *testing.T) {
+	srv, sent := recordingServer(t)
+	n := New()
+	n.baseURL = srv.URL
+	ev := domain.NotificationEvent{Kind: domain.EventKindTest, Title: "Test", At: time.Unix(1700000000, 0)}
+	if err := n.Send(t.Context(), json.RawMessage(`{"api_key":"k"}`), ev); err != nil {
+		t.Fatalf("Send error = %v", err)
+	}
+	got := sent()
+	if len(got) != 2 {
+		t.Fatalf("requests = %+v, want a create and a close", got)
+	}
+	alias := got[0].alias
+	if !strings.HasPrefix(alias, "statwarden-test-") {
+		t.Fatalf("alias = %q, want one of its own", alias)
+	}
+	if got[1].path != "/v2/alerts/"+alias+"/close" {
+		t.Fatalf("second request = %+v, want the close of %q", got[1], alias)
 	}
 }
 

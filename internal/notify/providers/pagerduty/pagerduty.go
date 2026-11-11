@@ -1,6 +1,7 @@
 // Package pagerduty delivers notifications through the PagerDuty Events API v2.
-// A DOWN event triggers an incident and the matching UP event resolves it,
-// keyed by a stable dedup_key derived from the monitor id. It follows the
+// A problem event triggers an incident and the matching "back to normal" event
+// resolves it, keyed by a stable dedup_key per monitor and event class (see
+// incidentFor). It follows the
 // reference webhook provider's shape: implement registry.Notifier,
 // self-register in init(), blank-import from cmd/statwarden.
 package pagerduty
@@ -99,10 +100,24 @@ func (n *Notifier) Send(ctx context.Context, cfg json.RawMessage, ev domain.Noti
 		return err
 	}
 
+	key, action := incidentFor(ev)
+	if err := n.enqueue(ctx, c, ev, key, action); err != nil {
+		return err
+	}
+	if ev.Kind == domain.EventKindTest {
+		// A test proves the routing key works; it is not an incident anybody
+		// should have to close by hand.
+		return n.enqueue(ctx, c, ev, key, "resolve")
+	}
+	return nil
+}
+
+// enqueue sends one Events API v2 event.
+func (n *Notifier) enqueue(ctx context.Context, c Config, ev domain.NotificationEvent, key, action string) error {
 	body := event{
 		RoutingKey:  c.RoutingKey,
-		EventAction: eventAction(ev),
-		DedupKey:    dedupKey(ev),
+		EventAction: action,
+		DedupKey:    key,
 	}
 	// A resolve carries no payload; a trigger describes the incident.
 	if body.EventAction == "trigger" {
@@ -148,18 +163,53 @@ func (n *Notifier) Send(ctx context.Context, cfg json.RawMessage, ev domain.Noti
 	return nil
 }
 
-// eventAction maps an UP recovery to "resolve" and everything else to
-// "trigger".
-func eventAction(ev domain.NotificationEvent) string {
-	if ev.Kind == domain.EventKindUp {
-		return "resolve"
+// incidentFor returns the dedup_key and event_action for an event.
+//
+// Each class of problem — an outage, slow responses, flapping, a certificate,
+// a maintenance window — is its own incident with its own key, and the event
+// that says the problem is over resolves exactly that key. They all used to
+// share statwarden-monitor-<id> with only an UP resolving it, so a certificate
+// warning opened (or joined) the outage incident and anything other than an
+// outage was never closed — while an UP closed whatever happened to be open.
+//
+// The outage keeps the bare key, so an incident opened before this change is
+// still resolved by the next UP. Resend reminders and escalations are DOWN
+// events and fold into the open outage incident, which is the point of a
+// dedup key. A certificate warning has no "renewed" event and stays open until
+// somebody acts on it, as it should. A test or digest has no monitor to key on
+// and gets a key of its own per send.
+func incidentFor(ev domain.NotificationEvent) (key, action string) {
+	monitor := fmt.Sprintf("statwarden-monitor-%d", ev.MonitorID)
+	switch ev.Kind {
+	case domain.EventKindDown:
+		return monitor, "trigger"
+	case domain.EventKindUp:
+		return monitor, "resolve"
+	case domain.EventKindLatencyAnomaly:
+		return monitor + "-latency", "trigger"
+	case domain.EventKindLatencyNormal:
+		return monitor + "-latency", "resolve"
+	case domain.EventKindFlapping:
+		return monitor + "-flapping", "trigger"
+	case domain.EventKindFlappingStable:
+		return monitor + "-flapping", "resolve"
+	case domain.EventKindCertExpiry:
+		return monitor + "-cert", "trigger"
+	case domain.EventKindMaintenanceStart:
+		return monitor + "-maintenance", "trigger"
+	case domain.EventKindMaintenanceEnd:
+		return monitor + "-maintenance", "resolve"
+	default:
+		return fmt.Sprintf("statwarden-%s-%d", ev.Kind, sendInstant(ev).UnixNano()), "trigger"
 	}
-	return "trigger"
 }
 
-// dedupKey ties the trigger and its later resolve to the same incident.
-func dedupKey(ev domain.NotificationEvent) string {
-	return fmt.Sprintf("statwarden-monitor-%d", ev.MonitorID)
+// sendInstant is the event's timestamp, or now for one that carries none.
+func sendInstant(ev domain.NotificationEvent) time.Time {
+	if ev.At.IsZero() {
+		return time.Now()
+	}
+	return ev.At
 }
 
 func summary(ev domain.NotificationEvent) string {
@@ -191,7 +241,7 @@ func severity(ev domain.NotificationEvent) string {
 	switch ev.Kind {
 	case domain.EventKindDown:
 		return "critical"
-	case domain.EventKindCertExpiry:
+	case domain.EventKindCertExpiry, domain.EventKindLatencyAnomaly, domain.EventKindFlapping:
 		return "warning"
 	case domain.EventKindMaintenanceStart, domain.EventKindMaintenanceEnd:
 		return "info"
