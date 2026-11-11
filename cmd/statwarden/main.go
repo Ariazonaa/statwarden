@@ -109,6 +109,11 @@ const (
 	httpReadTimeout       = 5 * time.Minute
 	httpWriteTimeout      = 5 * time.Minute
 	httpIdleTimeout       = 2 * time.Minute
+	// maxHeaderBytes caps request headers. net/http's default is 1 MiB, which
+	// every unauthenticated endpoint buffers before a handler can say no. 64 KiB
+	// is far above anything a browser, a scraper or a push cron sends — a full
+	// cookie jar plus a long URL is a few KiB.
+	maxHeaderBytes = 64 << 10
 )
 
 // settingString reads a settings key whose value is a JSON string, returning ""
@@ -759,6 +764,7 @@ func run() error {
 		ReadTimeout:       httpReadTimeout,
 		WriteTimeout:      httpWriteTimeout,
 		IdleTimeout:       httpIdleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
 	}
 
 	serveErr := make(chan error, 1)
