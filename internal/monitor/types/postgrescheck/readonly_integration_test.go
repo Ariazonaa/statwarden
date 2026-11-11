@@ -130,8 +130,10 @@ func TestAssertionQueryCannotWrite(t *testing.T) {
 			if res.Status != domain.StatusDown {
 				t.Fatalf("a writing assertion query was accepted: %s", tc.query)
 			}
-			// PostgreSQL's own refusal, not some unrelated failure.
-			if !strings.Contains(res.Message, "read-only transaction") {
+			// PostgreSQL's own refusal, not some unrelated failure. The message
+			// carries only the SQLSTATE, never the server's text (which can hold
+			// row data); 25006 is read_only_sql_transaction.
+			if !strings.Contains(res.Message, "SQLSTATE 25006") {
 				t.Fatalf("rejected for the wrong reason: %s", res.Message)
 			}
 		})
