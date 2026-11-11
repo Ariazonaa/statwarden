@@ -268,3 +268,35 @@ func TestAFailedAssertionDoesNotEchoTheObservedValue(t *testing.T) {
 		t.Errorf("the server's reason phrase reached the heartbeat message: %q", msg)
 	}
 }
+
+// The handshake response is read by a target the monitor merely points at, and
+// http.ReadResponse imposes no header limit of its own: a server that keeps
+// sending header lines grew the checker's memory until the check timed out.
+// One a little over the limit is enough to show it is enforced.
+func TestCheckRejectsOversizedHandshakeHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sum := sha1.Sum([]byte(r.Header.Get("Sec-WebSocket-Key") + wsGUID))
+		conn, buf, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = buf.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n")
+		pad := strings.Repeat("a", 1000)
+		for i := 0; i*1000 < maxHandshakeBytes+4096; i++ {
+			_, _ = buf.WriteString("X-Pad: " + pad + "\r\n")
+		}
+		_, _ = buf.WriteString("Sec-WebSocket-Accept: " + base64.StdEncoding.EncodeToString(sum[:]) + "\r\n\r\n")
+		_ = buf.Flush()
+	}))
+	defer srv.Close()
+
+	var ch Checker
+	res, err := ch.Check(context.Background(), mustCfg(t, Config{URL: wsURL(srv.URL, false)}))
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if res.Status != domain.StatusDown || !strings.Contains(res.Message, "exceeds") {
+		t.Fatalf("Check() = %s (%s), want down for oversized headers", res.Status, res.Message)
+	}
+}
