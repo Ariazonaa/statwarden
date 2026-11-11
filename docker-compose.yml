@@ -14,8 +14,10 @@ services:
     # main, tagged with the short commit SHA and `latest`, and pushes only after
     # a clean Trivy scan. The image is public; no `docker login` is needed.
     #
-    # For production, pin STATWARDEN_IMAGE to a SHA tag instead of `latest`:
-    # then what is running is legible, and a rollback is a tag change.
+    # For production, pin STATWARDEN_IMAGE to a release tag instead of
+    # `latest` — `X.Y.Z` (exact) or `X.Y` (that minor line's patches), no `v`
+    # prefix — or to a short-SHA tag for an unreleased main build. Then what is
+    # running is legible, and a rollback is a tag change.
     #
     # To build it yourself instead:
     #   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
