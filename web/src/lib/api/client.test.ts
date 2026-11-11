@@ -1284,6 +1284,25 @@ describe('transport', () => {
 		expect(calls[2].path).toBe('/api/v1/monitors/7/purge');
 	});
 
+	it('keeps a route parameter inside its own path segment', async () => {
+		// The ids come straight from the URL bar. Raw, `7/purge` turned a soft
+		// delete into the irreversible purge, and a slug carrying `?` rewrote the
+		// query string.
+		reply(undefined, 204);
+		await api.deleteMonitor('7/purge');
+		expect(calls[0].path).toBe('/api/v1/monitors/7%2Fpurge');
+
+		reply({});
+		await api.publicStatusPage('a?range=1y').catch(() => {});
+		expect(calls[1].path).toBe('/api/v1/public/status/a%3Frange%3D1y');
+	});
+
+	it('refuses a dot segment, which URL parsing would resolve away', () => {
+		expect(() => api.getMonitor('..')).toThrow(/invalid path segment/);
+		expect(() => api.deleteTag('.')).toThrow(/invalid path segment/);
+		expect(calls).toHaveLength(0);
+	});
+
 	it('translates a problem+json body into an ApiError carrying the status', async () => {
 		reply({ title: 'Conflict', status: 409, detail: 'layout is stale' }, 409);
 		const err = await api

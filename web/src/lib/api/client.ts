@@ -173,6 +173,21 @@ function noteUnauthorized(path: string, status: number): void {
 	reportUnauthorized();
 }
 
+/**
+ * One path segment from a caller-supplied value — a route parameter, mostly.
+ *
+ * Interpolated raw, a value such as `7/purge` or `1?x=` reached a different
+ * endpoint than the one the call names, with the session cookie and CSRF header
+ * attached. Percent-encoding confines it to its segment; `.` and `..` survive
+ * encoding and are still resolved by URL parsing, so they are refused outright.
+ */
+function seg(value: string): string {
+	if (value === '.' || value === '..' || value === '') {
+		throw new Error(`invalid path segment "${value}"`);
+	}
+	return encodeURIComponent(value);
+}
+
 async function http<T>(
 	method: Method,
 	path: string,
@@ -1453,12 +1468,12 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Triggers a check and resolves once its heartbeat has actually landed. */
 async function triggerCheckAndWait(id: string): Promise<Monitor> {
-	const before = await http<WireMonitor>('GET', `/monitors/${id}`);
-	await http('POST', `/monitors/${id}/check`);
+	const before = await http<WireMonitor>('GET', `/monitors/${seg(id)}`);
+	await http('POST', `/monitors/${seg(id)}/check`);
 	const deadline = Date.now() + CHECK_POLL_TIMEOUT_MS;
 	for (;;) {
 		await sleep(CHECK_POLL_INTERVAL_MS);
-		const current = await http<WireMonitor>('GET', `/monitors/${id}`);
+		const current = await http<WireMonitor>('GET', `/monitors/${seg(id)}`);
 		// last_checked_at comes from the newest heartbeat, which the engine writes
 		// only after the check completes, so a change is proof the check ran.
 		if (current.last_checked_at !== before.last_checked_at || Date.now() >= deadline) {
@@ -1588,12 +1603,12 @@ const realApi: Api = {
 	linkOidc: (provider, confirm) =>
 		http<{ authorize_url: string }>(
 			'POST',
-			`/me/oidc/${provider}/link-start`,
+			`/me/oidc/${seg(provider)}/link-start`,
 			stepUpToWire(confirm)
 		).then((w) => ({
 			authorizeUrl: w.authorize_url
 		})),
-	unlinkIdentity: (id) => http('DELETE', `/me/oidc/identities/${id}`),
+	unlinkIdentity: (id) => http('DELETE', `/me/oidc/identities/${seg(id)}`),
 
 	// Every page, not the first.
 	//
@@ -1604,38 +1619,38 @@ const realApi: Api = {
 	// the cliff to 200. The mock returns everything, which is why it never
 	// showed up in development.
 	listMonitors: () => listAll<WireMonitor>('/monitors').then((w) => w.map(monitorFromWire)),
-	getMonitor: (id) => http<WireMonitor>('GET', `/monitors/${id}`).then(monitorFromWire),
+	getMonitor: (id) => http<WireMonitor>('GET', `/monitors/${seg(id)}`).then(monitorFromWire),
 	createMonitor: (i) =>
 		http<WireMonitor>('POST', '/monitors', monitorToWire(i)).then(monitorFromWire),
 	// PUT, not PATCH: monitorRequest is full-replace and the route is PUT.
 	updateMonitor: (id, i) =>
-		http<WireMonitor>('PUT', `/monitors/${id}`, monitorToWire(i)).then(monitorFromWire),
+		http<WireMonitor>('PUT', `/monitors/${seg(id)}`, monitorToWire(i)).then(monitorFromWire),
 	// A soft delete: the monitor moves to the recycle bin, out of every other
 	// read, and stays restorable until the grace period expires or someone purges
 	// it. Same verb and same path as before, because from the caller's side
 	// nothing changed — what changed is that it is now undoable.
-	deleteMonitor: (id) => http('DELETE', `/monitors/${id}`),
+	deleteMonitor: (id) => http('DELETE', `/monitors/${seg(id)}`),
 	listDeletedMonitors: () =>
 		http<WireItems<WireMonitor>>('GET', '/monitors/trash').then((w) =>
 			(w.items ?? []).map(monitorFromWire)
 		),
 	restoreMonitor: (id) =>
-		http<WireMonitor>('POST', `/monitors/${id}/restore`).then(monitorFromWire),
+		http<WireMonitor>('POST', `/monitors/${seg(id)}/restore`).then(monitorFromWire),
 	// Irreversible, and the only DELETE here that destroys accumulated HISTORY
 	// rather than a piece of configuration — a status page or a tag can be
 	// recreated in a minute; three years of heartbeats cannot. Admin-only on the
 	// server for that reason.
-	purgeMonitor: (id) => http('DELETE', `/monitors/${id}/purge`),
+	purgeMonitor: (id) => http('DELETE', `/monitors/${seg(id)}/purge`),
 	// pause/resume/check answer 204/202 with no body, but the callers replace a
 	// monitor in the store with what they get back, so re-read the row. Without
 	// the re-read the dashboard replaces the card with undefined.
 	pauseMonitor: (id) =>
-		http('POST', `/monitors/${id}/pause`).then(() =>
-			http<WireMonitor>('GET', `/monitors/${id}`).then(monitorFromWire)
+		http('POST', `/monitors/${seg(id)}/pause`).then(() =>
+			http<WireMonitor>('GET', `/monitors/${seg(id)}`).then(monitorFromWire)
 		),
 	resumeMonitor: (id) =>
-		http('POST', `/monitors/${id}/resume`).then(() =>
-			http<WireMonitor>('GET', `/monitors/${id}`).then(monitorFromWire)
+		http('POST', `/monitors/${seg(id)}/resume`).then(() =>
+			http<WireMonitor>('GET', `/monitors/${seg(id)}`).then(monitorFromWire)
 		),
 	// Unlike pause/resume, this one cannot simply re-read: the check runs
 	// asynchronously behind a 202, so an immediate re-read is guaranteed stale.
@@ -1660,7 +1675,7 @@ const realApi: Api = {
 		});
 		return http<{ monitor_id: number; heartbeats: WireHeartbeat[] | null }>(
 			'GET',
-			`/monitors/${id}/heartbeats?${qs}`
+			`/monitors/${seg(id)}/heartbeats?${qs}`
 		).then((w) =>
 			downsampleHeartbeats((w.heartbeats ?? []).map(heartbeatFromWire).reverse(), points)
 		);
@@ -1668,7 +1683,7 @@ const realApi: Api = {
 	events: (id) =>
 		http<{ monitor_id: number; heartbeats: WireHeartbeat[] | null }>(
 			'GET',
-			`/monitors/${id}/heartbeats?important=true&limit=${EVENT_LIMIT}`
+			`/monitors/${seg(id)}/heartbeats?important=true&limit=${EVENT_LIMIT}`
 		).then((w) => eventsFromWire(w.heartbeats ?? [])),
 	monitorEvents: (page) =>
 		http<WireList<WireHeartbeat>>(
@@ -1681,8 +1696,8 @@ const realApi: Api = {
 	// the token plus both public badge URLs. Revoke answers 204 and both URLs stop
 	// resolving.
 	createMonitorBadge: (id) =>
-		http<WireMonitorBadge>('POST', `/monitors/${id}/badge`).then(monitorBadgeFromWire),
-	revokeMonitorBadge: (id) => http('DELETE', `/monitors/${id}/badge`),
+		http<WireMonitorBadge>('POST', `/monitors/${seg(id)}/badge`).then(monitorBadgeFromWire),
+	revokeMonitorBadge: (id) => http('DELETE', `/monitors/${seg(id)}/badge`),
 
 	// One request for the whole selection, not N. Answers 200 with per-id
 	// outcomes even on partial failure, so callers must inspect `failed`.
@@ -1700,15 +1715,15 @@ const realApi: Api = {
 			monitorGroupFromWire
 		),
 	updateMonitorGroup: (id, i) =>
-		http<WireMonitorGroup>('PUT', `/monitor-groups/${id}`, monitorGroupToWire(i)).then(
+		http<WireMonitorGroup>('PUT', `/monitor-groups/${seg(id)}`, monitorGroupToWire(i)).then(
 			monitorGroupFromWire
 		),
-	deleteMonitorGroup: (id) => http('DELETE', `/monitor-groups/${id}`),
+	deleteMonitorGroup: (id) => http('DELETE', `/monitor-groups/${seg(id)}`),
 
 	listTags: () => http<WireTag[] | null>('GET', '/tags').then((w) => (w ?? []).map(tagFromWire)),
 	createTag: (i) => http<WireTag>('POST', '/tags', tagToWire(i)).then(tagFromWire),
-	updateTag: (id, i) => http<WireTag>('PUT', `/tags/${id}`, tagToWire(i)).then(tagFromWire),
-	deleteTag: (id) => http('DELETE', `/tags/${id}`),
+	updateTag: (id, i) => http<WireTag>('PUT', `/tags/${seg(id)}`, tagToWire(i)).then(tagFromWire),
+	deleteTag: (id) => http('DELETE', `/tags/${seg(id)}`),
 
 	listNotifications: () =>
 		http<WireNotification[] | null>('GET', '/notifications').then((w) =>
@@ -1719,12 +1734,12 @@ const realApi: Api = {
 			notificationFromWire
 		),
 	updateNotification: (id, i) =>
-		http<WireNotification>('PUT', `/notifications/${id}`, notificationToWire(i)).then(
+		http<WireNotification>('PUT', `/notifications/${seg(id)}`, notificationToWire(i)).then(
 			notificationFromWire
 		),
-	deleteNotification: (id) => http('DELETE', `/notifications/${id}`),
+	deleteNotification: (id) => http('DELETE', `/notifications/${seg(id)}`),
 	testNotification: (id) =>
-		http('POST', `/notifications/${id}/test`).then(() => ({ delivered: true })),
+		http('POST', `/notifications/${seg(id)}/test`).then(() => ({ delivered: true })),
 
 	certificateOverview: () =>
 		http<WireItems<WireCertRow>>('GET', '/report/certificates').then((w) =>
@@ -1737,23 +1752,23 @@ const realApi: Api = {
 	createMaintenance: (i) =>
 		http<WireMaintenance>('POST', '/maintenance', maintenanceToWire(i)).then(maintenanceFromWire),
 	updateMaintenance: (id, i) =>
-		http<WireMaintenance>('PUT', `/maintenance/${id}`, maintenanceToWire(i)).then(
+		http<WireMaintenance>('PUT', `/maintenance/${seg(id)}`, maintenanceToWire(i)).then(
 			maintenanceFromWire
 		),
-	deleteMaintenance: (id) => http('DELETE', `/maintenance/${id}`),
+	deleteMaintenance: (id) => http('DELETE', `/maintenance/${seg(id)}`),
 
 	listUsers: () =>
 		http<WireUser[] | null>('GET', '/users').then((w) => (w ?? []).map(userFromWire)),
 	createUser: (i) => http<WireUser>('POST', '/users', createUserToWire(i)).then(userFromWire),
 	updateUser: (id, i) =>
-		http<WireUser>('PUT', `/users/${id}`, updateUserToWire(i)).then(userFromWire),
-	deleteUser: (id) => http('DELETE', `/users/${id}`),
+		http<WireUser>('PUT', `/users/${seg(id)}`, updateUserToWire(i)).then(userFromWire),
+	deleteUser: (id) => http('DELETE', `/users/${seg(id)}`),
 
 	listSessions: () =>
 		http<WireSession[] | null>('GET', '/me/sessions').then((w) => (w ?? []).map(sessionFromWire)),
 	// Session rows are addressed by the hash of their cookie token, which the
 	// list endpoint blanks, so 'others' is the only selector the server accepts.
-	revokeSession: (id) => http('DELETE', `/me/sessions/${id}`),
+	revokeSession: (id) => http('DELETE', `/me/sessions/${seg(id)}`),
 	listApiKeys: () =>
 		http<WireApiKey[] | null>('GET', '/me/api-keys').then((w) =>
 			(w ?? []).map((k) => apiKeyFromWire(k))
@@ -1770,7 +1785,7 @@ const realApi: Api = {
 			...(i.expiresInDays ? { expires_in_days: i.expiresInDays } : {}),
 			...stepUpToWire(i.confirm)
 		}).then((w) => apiKeyFromWire(w.api_key, w.secret)),
-	revokeApiKey: (id) => http('DELETE', `/me/api-keys/${id}`),
+	revokeApiKey: (id) => http('DELETE', `/me/api-keys/${seg(id)}`),
 
 	// Same as listMonitors: the Activity screen searches only what it has, so a
 	// single page answered "nothing found" for an actor whose last action was one
@@ -1826,26 +1841,26 @@ const realApi: Api = {
 			(w ?? []).map(statusPageFromWire)
 		),
 	getStatusPage: (id) =>
-		http<WireStatusPage>('GET', `/status-pages/${id}`).then(statusPageFromWire),
+		http<WireStatusPage>('GET', `/status-pages/${seg(id)}`).then(statusPageFromWire),
 	createStatusPage: (i) =>
 		http<WireStatusPage>('POST', '/status-pages', statusPageToWire(i)).then(statusPageFromWire),
 	updateStatusPage: (id, i) =>
-		http<WireStatusPage>('PUT', `/status-pages/${id}`, statusPageToWire(i)).then(
+		http<WireStatusPage>('PUT', `/status-pages/${seg(id)}`, statusPageToWire(i)).then(
 			statusPageFromWire
 		),
-	deleteStatusPage: (id) => http('DELETE', `/status-pages/${id}`),
+	deleteStatusPage: (id) => http('DELETE', `/status-pages/${seg(id)}`),
 	// The mapper on the upload is load-bearing: the handler returns the whole
 	// page in wire shape, so without it the editor reads undefined from
 	// logoPath and the new logo never previews.
 	uploadStatusPageLogo: (id, file) =>
-		upload<WireStatusPage>(`/status-pages/${id}/logo`, 'logo', file).then(statusPageFromWire),
-	deleteStatusPageLogo: (id) => http('DELETE', `/status-pages/${id}/logo`),
+		upload<WireStatusPage>(`/status-pages/${seg(id)}/logo`, 'logo', file).then(statusPageFromWire),
+	deleteStatusPageLogo: (id) => http('DELETE', `/status-pages/${seg(id)}/logo`),
 	// Same story as the logo upload: the layout handler answers with the whole
 	// page in wire shape. `Api` is derived from the mock, so a missing mapper is
 	// invisible here — the return type only pins the method down, not the shape
 	// http() hands back — and the editor would re-seed itself from snake_case.
 	reorderStatusPageLayout: (id, order) =>
-		http<WireStatusPage>('PATCH', `/status-pages/${id}/layout`, {
+		http<WireStatusPage>('PATCH', `/status-pages/${seg(id)}/layout`, {
 			ungrouped: order.ungrouped.map(Number),
 			groups: order.groups.map((g) => ({
 				group_id: Number(g.groupId),
@@ -1853,11 +1868,11 @@ const realApi: Api = {
 			}))
 		}).then(statusPageFromWire),
 	listIncidents: (sid) =>
-		http<WireItems<WireIncident>>('GET', `/status-pages/${sid}/incidents`).then((w) =>
+		http<WireItems<WireIncident>>('GET', `/status-pages/${seg(sid)}/incidents`).then((w) =>
 			(w.items ?? []).map(incidentFromWire)
 		),
 	createIncident: (sid, i) =>
-		http<WireIncident>('POST', `/status-pages/${sid}/incidents`, incidentToWire(i)).then(
+		http<WireIncident>('POST', `/status-pages/${seg(sid)}/incidents`, incidentToWire(i)).then(
 			incidentFromWire
 		),
 	// Both ids are load-bearing. The server resolves the incident under the status
@@ -1866,16 +1881,16 @@ const realApi: Api = {
 	// handlers really did ignore the page id — matched no page and made every
 	// timeline post and every delete a 404 from the UI.
 	addIncidentUpdate: (sid, iid, i) =>
-		http<WireIncident>('POST', `/status-pages/${sid}/incidents/${iid}/updates`, {
+		http<WireIncident>('POST', `/status-pages/${seg(sid)}/incidents/${seg(iid)}/updates`, {
 			status: i.status,
 			body: i.body
 		}).then(incidentFromWire),
-	deleteIncident: (sid, iid) => http('DELETE', `/status-pages/${sid}/incidents/${iid}`),
+	deleteIncident: (sid, iid) => http('DELETE', `/status-pages/${seg(sid)}/incidents/${seg(iid)}`),
 	// The retrospective has its own endpoint because updateIncident is
 	// full-replace: routing it through there would let a stale editor erase a
 	// write-up it never loaded. See incidentToWire.
 	setIncidentPostmortem: (sid, iid, i) =>
-		http<WireIncident>('PUT', `/status-pages/${sid}/incidents/${iid}/postmortem`, {
+		http<WireIncident>('PUT', `/status-pages/${seg(sid)}/incidents/${seg(iid)}/postmortem`, {
 			body: i.body,
 			published: i.published
 		}).then(incidentFromWire),
@@ -1890,7 +1905,7 @@ const realApi: Api = {
 	publicStatusPage: (slug, password, range) =>
 		http(
 			'GET',
-			`/public/status/${slug}${range ? `?range=${range}` : ''}`,
+			`/public/status/${seg(slug)}${range ? `?range=${range}` : ''}`,
 			undefined,
 			password ? { 'X-Page-Password': password } : undefined
 		),
@@ -1901,7 +1916,7 @@ const realApi: Api = {
 	publicStatusHistory: (slug, password, months) =>
 		http(
 			'GET',
-			`/public/status/${slug}/history${months ? `?months=${months}` : ''}`,
+			`/public/status/${seg(slug)}/history${months ? `?months=${months}` : ''}`,
 			undefined,
 			password ? { 'X-Page-Password': password } : undefined
 		)
