@@ -82,9 +82,9 @@ func TestPruneBeforeDeletesInBatches(t *testing.T) {
 	// 23 rows before the cutoff (3 full batches + 2), 5 at or after it.
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO heartbeats (monitor_id, checked_at, status)
-		SELECT $1, $2::timestamptz - make_interval(mins => g), 'up' FROM generate_series(1, 23) g
+		SELECT $1::bigint, $2::timestamptz - make_interval(mins => g), 'up' FROM generate_series(1, 23) g
 		UNION ALL
-		SELECT $1, $2::timestamptz + make_interval(mins => g), 'up' FROM generate_series(0, 4) g`,
+		SELECT $1::bigint, $2::timestamptz + make_interval(mins => g), 'up' FROM generate_series(0, 4) g`,
 		monitorID, cutoff); err != nil {
 		t.Fatalf("seed heartbeats: %v", err)
 	}
