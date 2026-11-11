@@ -161,7 +161,9 @@ line; pin `X.Y.Z` if a restart must never change the version.
 - Named volumes `pgdata` (database) and `uploads` (logos/branding) survive
   container restarts.
 - Set at least `SESSION_SECRET`, `ENCRYPTION_KEY` and `POSTGRES_PASSWORD` in
-  `.env`; compose derives `DATABASE_URL` from `POSTGRES_PASSWORD`. The copied
+  `.env`; compose builds `DATABASE_URL` from `POSTGRES_USER`/`POSTGRES_DB` and
+  passes `POSTGRES_PASSWORD` to the app as `PGPASSWORD`, so the password may
+  contain any character. The copied
   file will not boot as-is — the two secrets it ships are rejected as
   placeholders, on purpose.
 - Back `.env` up alongside the `pgdata` volume. A database dump restored without

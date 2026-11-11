@@ -39,7 +39,13 @@ services:
     ports:
       - "${PORT:-3001}:3001"
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-statwarden}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:-statwarden}?sslmode=disable
+      # The password is NOT spliced into the URL. Compose interpolates it
+      # verbatim, so a generated password containing @, /, :, ? or # produced a
+      # URL that parsed as a different host or database — or not at all. It goes
+      # in PGPASSWORD instead, which pgx and pg_dump both read when the URL
+      # carries no password.
+      DATABASE_URL: postgres://${POSTGRES_USER:-statwarden}@db:5432/${POSTGRES_DB:-statwarden}?sslmode=disable
+      PGPASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
       # Both secrets are consumed as-is -- ENCRYPTION_KEY is hashed once into
       # the AES-256 key for stored credentials, SESSION_SECRET keys an HMAC --
       # with no KDF in front, so the app rejects anything under 32 characters,
@@ -51,8 +57,8 @@ services:
       # Quoted, and they have to stay quoted: the `: ` inside the message is a
       # mapping indicator to YAML, so unquoted these abort `docker compose` with
       # "mapping values are not allowed in this context" before any container is
-      # built. Nothing else in this file needs quoting -- line 28's colons are
-      # not followed by a space, which is what actually triggers it.
+      # built. The DATABASE_URL line needs no quoting -- its colons are not
+      # followed by a space, which is what actually triggers it.
       SESSION_SECRET: "${SESSION_SECRET:?SESSION_SECRET is required (generate with: openssl rand -base64 48)}"
       ENCRYPTION_KEY: "${ENCRYPTION_KEY:?ENCRYPTION_KEY is required (generate with: openssl rand -base64 48)}"
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:3001}
