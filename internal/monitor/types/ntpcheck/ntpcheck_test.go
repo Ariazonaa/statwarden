@@ -116,9 +116,18 @@ func TestASkewedClockIsDown(t *testing.T) {
 	}
 
 	// Behind is as wrong as ahead.
+	// The offset is a measurement, so it is checked against a band like the
+	// +5s case above rather than as text: under -race the round trip is slow
+	// enough to report -2.999s, which no longer contains "-3".
 	port = fakeNTP(t, server{stratum: 1, skew: -3 * time.Second})
-	if res := check(t, port, ""); res.Status != domain.StatusDown || !strings.Contains(res.Message, "-3") {
+	res = check(t, port, "")
+	if res.Status != domain.StatusDown || !strings.Contains(res.Message, "clock offset -") {
 		t.Fatalf("server 3s behind = %s (%s), want down with a negative offset", res.Status, res.Message)
+	}
+	st = stats{}
+	_ = json.Unmarshal(res.Extra, &st)
+	if st.OffsetMs > -2800 || st.OffsetMs < -3200 {
+		t.Fatalf("measured offset = %vms, want about -3000", st.OffsetMs)
 	}
 
 	// And a wider allowance accepts it.
