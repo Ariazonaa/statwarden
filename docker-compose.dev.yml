@@ -1,4 +1,4 @@
-# Statwarden — development stack: PostgreSQL only, exposed on localhost:5432.
+# Statwarden — development stack: PostgreSQL only, on 127.0.0.1:5432.
 # The app itself runs natively for hot reload:
 #   docker compose -f docker-compose.dev.yml up -d
 #   make dev                # Go backend (DEV_MODE, text logs)
@@ -9,8 +9,11 @@ services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    # Loopback only. The credentials below are public — they are in this file
+    # — so publishing on every interface handed the database to the whole LAN
+    # (or the internet, on a cloud dev box).
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_USER: statwarden
       POSTGRES_PASSWORD: statwarden
