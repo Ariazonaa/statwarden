@@ -4,10 +4,11 @@
 // provider plugins registered in internal/notify/registry.
 //
 // Event flow: engine → HandleStateChange (a channel send, nothing more) → a
-// recorder goroutine writes the event to the outbox → a
-// single dispatch goroutine resolves the monitor's channel assignments,
-// applies the policy layers (suppression, mute/snooze, digest batching,
-// quiet hours) and fans out concurrently with per-provider error isolation.
+// recorder goroutine writes the event to the outbox → the dispatch loop hands
+// it to its monitor's lane, which (one event at a time per monitor, monitors in
+// parallel) resolves the channel assignments, applies the policy layers
+// (suppression, mute/snooze, digest batching, quiet hours) and fans out
+// concurrently with per-provider error isolation.
 // Every attempted delivery is recorded in the audit log.
 package notify
 
@@ -20,6 +21,7 @@ import (
 	"maps"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -37,8 +39,8 @@ const (
 	// DefaultQueueSize is the event queue length; the queue decouples the
 	// engine's synchronous OnEvent callback from delivery work. It is sized for
 	// a burst — a whole fleet transitioning at once, e.g. after a network blip —
-	// because the dispatch loop is single-threaded and one slow provider holds it
-	// for a full send timeout, during which everything else queues behind it.
+	// and it bounds the tasks waiting AND running: a slow provider holds a slot
+	// in its monitor's lane for a full send budget. See dispatch.
 	DefaultQueueSize = 4096
 	// enqueueBlockTimeout is how long a caller waits for room in a full queue
 	// before the event is dropped. It trades one briefly stalled engine worker
@@ -198,7 +200,22 @@ type Dispatcher struct {
 
 	baseCtx context.Context
 	cancel  context.CancelFunc
-	tasks   chan func(context.Context)
+	tasks   chan queuedTask
+	// slots bounds the tasks handed to lanes but not yet finished, at the
+	// queue size. Without it the loop would move the queue into the lanes as
+	// fast as it filled, and a full queue — the backpressure enqueue is built
+	// around — could never form.
+	slots chan struct{}
+	// laneMu guards lanes, the per-monitor serial queues (see dispatch).
+	// lanesWG counts the running lane goroutines, so the loop can wait for them
+	// when it drains.
+	laneMu  sync.Mutex
+	lanes   map[int64]*lane
+	lanesWG sync.WaitGroup
+	// queued counts tasks accepted and not yet finished. Like inflight it exists
+	// so a test can wait for the dispatcher to go idle; production never reads
+	// it.
+	queued atomic.Int64
 	// quit signals shutdown. It exists instead of closing tasks: enqueue may
 	// block on a send while waiting for room in a full queue, and it cannot hold
 	// d.mu while doing so (the dispatch loop takes the same mutex), so a Stop
@@ -262,6 +279,9 @@ type Dispatcher struct {
 	// left to stop them. A DOWN older than this instant announces an outage
 	// that is already over and is discarded instead.
 	lastNotDown map[int64]time.Time
+	// held is the set of outbox rows this process has queued and not yet
+	// finished with. See queueHeld.
+	held map[int64]struct{}
 
 	// digestBuf collects pending digest items per channel; digestTimer is
 	// armed while the buffer is non-empty.
@@ -304,7 +324,9 @@ func New(opts Options) *Dispatcher {
 		digest:       opts.Digest,
 		baseCtx:      ctx,
 		cancel:       cancel,
-		tasks:        make(chan func(context.Context), opts.QueueSize),
+		tasks:        make(chan queuedTask, opts.QueueSize),
+		slots:        make(chan struct{}, opts.QueueSize),
+		lanes:        map[int64]*lane{},
 		quit:         make(chan struct{}),
 		done:         make(chan struct{}),
 		intake:       make(chan intakeItem, intakeBuffer),
@@ -313,6 +335,7 @@ func New(opts Options) *Dispatcher {
 		down:         make(map[int64]*downState),
 		forgotten:    make(map[int64]struct{}),
 		lastNotDown:  map[int64]time.Time{},
+		held:         map[int64]struct{}{},
 		mutes:        make(map[int64]time.Time),
 		digestBuf:    make(map[int64]*digestBuffer),
 	}
@@ -323,22 +346,28 @@ func (d *Dispatcher) Start() {
 	safego.Go(d.log, "outbox recorder", d.recordLoop)
 	safego.Go(d.log, "dispatch loop", func() {
 		defer close(d.done)
+		// Drain what was already accepted before exiting: those events were
+		// taken on the promise of being delivered, and Stop's whole contract is
+		// to drain rather than discard. The lanes are waited for too — a task
+		// handed to one is accepted just the same.
+		defer d.lanesWG.Wait()
 		for {
+			// A slot first, then a task. Taking the task first would empty the
+			// queue into the lanes without bound, and a full queue — the
+			// backpressure enqueue is built around — could never form.
 			select {
-			case task := <-d.tasks:
-				d.runTask(task)
+			case d.slots <- struct{}{}:
 			case <-d.quit:
-				// Drain what was already accepted before exiting: those events
-				// were taken on the promise of being delivered, and Stop's whole
-				// contract is to drain rather than discard.
-				for {
-					select {
-					case task := <-d.tasks:
-						d.runTask(task)
-					default:
-						return
-					}
-				}
+				d.drainTasks()
+				return
+			}
+			select {
+			case t := <-d.tasks:
+				d.dispatch(t)
+			case <-d.quit:
+				<-d.slots
+				d.drainTasks()
+				return
 			}
 		}
 	})
@@ -346,6 +375,88 @@ func (d *Dispatcher) Start() {
 		"providers", d.reg.List(),
 		"digest", d.digest.Interval > 0,
 		"quiet_hours", d.quiet != nil)
+}
+
+// drainTasks hands everything still queued to its lane after quit. A slot is
+// still taken per task: the lanes keep running and free them, and Stop's
+// deadline (which cancels the in-flight sends) bounds the wait.
+func (d *Dispatcher) drainTasks() {
+	for {
+		select {
+		case t := <-d.tasks:
+			d.slots <- struct{}{}
+			d.dispatch(t)
+		default:
+			return
+		}
+	}
+}
+
+// queuedTask is one unit of dispatch work and the lane it runs in.
+type queuedTask struct {
+	// lane is the monitor the task belongs to; 0 for work that has none (a
+	// digest flush).
+	lane int64
+	run  func(context.Context)
+}
+
+// lane is the serial queue of one monitor's tasks.
+type lane struct {
+	pending []queuedTask
+}
+
+// dispatch hands a task to its monitor's lane, starting the lane's goroutine
+// if it is idle. It never waits on the task itself.
+//
+// The dispatch loop used to RUN every task, fan-out included, before taking the
+// next. A provider that accepted the connection and then said nothing held the
+// whole queue for its full send budget — SendAttempts × SendTimeout plus retry
+// delays — so during a fleet-wide incident every alert on every channel waited
+// behind it, and outbox leases lapsed underneath events that had not even
+// started.
+//
+// Per monitor, and still strictly in order within one. Everything the long
+// comments in this file rely on about ordering is about ONE monitor: a
+// recovery must not overtake the DOWN it resolves (it would find nobody
+// marked as told), a replayed DOWN must see the recovery that superseded it.
+// Across monitors the tasks share nothing that is not already under d.mu — the
+// outage map, the mutes, the digest buffer — because Restore and the timers
+// already reach them from other goroutines. A hanging channel now delays only
+// the monitor whose alert is waiting on it.
+func (d *Dispatcher) dispatch(t queuedTask) {
+	d.laneMu.Lock()
+	l, busy := d.lanes[t.lane]
+	if !busy {
+		l = &lane{}
+		d.lanes[t.lane] = l
+	}
+	l.pending = append(l.pending, t)
+	d.laneMu.Unlock()
+	if !busy {
+		d.lanesWG.Add(1)
+		safego.Go(d.log, "notification lane", func() { d.runLane(t.lane, l) })
+	}
+}
+
+// runLane works through one lane until it is empty, then retires it.
+func (d *Dispatcher) runLane(key int64, l *lane) {
+	defer d.lanesWG.Done()
+	for {
+		d.laneMu.Lock()
+		if len(l.pending) == 0 {
+			delete(d.lanes, key)
+			d.laneMu.Unlock()
+			return
+		}
+		t := l.pending[0]
+		l.pending[0] = queuedTask{}
+		l.pending = l.pending[1:]
+		d.laneMu.Unlock()
+
+		d.runTask(t.run)
+		<-d.slots
+		d.queued.Add(-1)
+	}
 }
 
 // runTask executes one queued task with its panic contained.
@@ -432,7 +543,7 @@ func (d *Dispatcher) Restore(ctx context.Context) error {
 		d.down[o.MonitorID] = st
 		if settings.ResendInterval > 0 {
 			st.resendTimer = d.clock.AfterFunc(settings.ResendInterval, func() {
-				d.enqueue(func(ctx context.Context) { d.processResend(ctx, o.MonitorID) })
+				d.enqueueFor(o.MonitorID, func(ctx context.Context) { d.processResend(ctx, o.MonitorID) })
 			})
 		}
 		for _, delay := range escalationDelays(assignments) {
@@ -565,21 +676,34 @@ func (d *Dispatcher) stopDispatchLoop() {
 // The fast path never blocks: HandleStateChange runs on an engine worker, whose
 // contract is to return immediately. But dropping straight to the floor on a
 // full queue loses an ALERT, which is the product — and the queue fills exactly
-// when it matters, because the dispatch loop is single-threaded and one slow
-// provider holds it for the whole send timeout. So a full queue buys a bounded
+// when it matters, during a fleet-wide incident with a provider that has
+// stopped answering, whose sends each hold a slot for the whole send budget.
+// So a full queue buys a bounded
 // wait before giving up: one stalled worker for a few seconds beats a silently
 // missing page. Only after that does the event go, and then loudly enough to be
 // found afterwards.
-func (d *Dispatcher) enqueue(task func(context.Context)) {
+//
+// It reports whether the task was accepted. enqueue is enqueueFor for work
+// that belongs to no monitor.
+func (d *Dispatcher) enqueue(run func(context.Context)) bool {
+	return d.enqueueFor(0, run)
+}
+
+// enqueueFor queues run in the given monitor's lane (see dispatch).
+func (d *Dispatcher) enqueueFor(monitorID int64, run func(context.Context)) bool {
+	task := queuedTask{lane: monitorID, run: run}
 	d.mu.Lock()
 	if d.stopped {
 		d.mu.Unlock()
-		return
+		return false
 	}
+	// Counted before the send, so the count can never dip below the work that
+	// is really outstanding (the task may run before the send returns).
+	d.queued.Add(1)
 	select {
 	case d.tasks <- task:
 		d.mu.Unlock()
-		return
+		return true
 	default:
 	}
 	d.mu.Unlock()
@@ -594,6 +718,7 @@ func (d *Dispatcher) enqueue(task func(context.Context)) {
 	defer timer.Stop()
 	select {
 	case d.tasks <- task:
+		return true
 	case <-d.quit:
 		// Shutting down while we waited; the loop is on its way out and nothing
 		// would run this task.
@@ -602,6 +727,8 @@ func (d *Dispatcher) enqueue(task func(context.Context)) {
 		d.log.Error("notification queue still full after waiting, DROPPING an alert event",
 			"queue_size", cap(d.tasks), "waited", enqueueBlockTimeout)
 	}
+	d.queued.Add(-1)
+	return false
 }
 
 // ---------------------------------------------------------------------------
@@ -700,15 +827,53 @@ func (d *Dispatcher) recordAndQueue(it intakeItem) {
 		d.log.Error("notify: could not record the event for retry; delivering without a safety net",
 			"kind", it.rec.Kind, "monitor_id", it.rec.MonitorID, "error", err)
 	}
-	d.enqueue(func(ctx context.Context) {
-		if it.run(ctx) == outcomeDone {
+	d.queueHeld(id, it.rec.MonitorID, it.run)
+	// outcomeRetry deliberately leaves the row. Its lease was set on insert, so
+	// it becomes due once that lapses and the sweeper runs the event again —
+	// which is the whole difference between an outbox and a log of things that
+	// were attempted once.
+}
+
+// queueHeld queues the processing of outbox row id (0 = not recorded) and
+// marks the row as held by this process until that processing has finished.
+//
+// The lease alone could not say that. It is taken when the row is written,
+// while the wait in front of the delivery has no bound: behind a hanging
+// channel it ran to minutes per event, and a lease that lapsed in the queue
+// made the sweeper queue the same event a second time — delivered twice once
+// the channel came back. The lease still decides what a restarted process
+// picks up; within this one, a held row is never queued again.
+//
+// It reports whether the task was queued. A task the queue refused releases
+// its hold at once, so the sweeper is what retries it.
+func (d *Dispatcher) queueHeld(id, monitorID int64, run func(context.Context) outcome) bool {
+	if id != 0 {
+		d.mu.Lock()
+		if _, dup := d.held[id]; dup {
+			d.mu.Unlock()
+			return false
+		}
+		d.held[id] = struct{}{}
+		d.mu.Unlock()
+	}
+	release := func() {
+		if id == 0 {
+			return
+		}
+		d.mu.Lock()
+		delete(d.held, id)
+		d.mu.Unlock()
+	}
+	ok := d.enqueueFor(monitorID, func(ctx context.Context) {
+		defer release()
+		if run(ctx) == outcomeDone {
 			d.completeOutbox(id)
 		}
-		// outcomeRetry deliberately leaves the row. Its lease was set on
-		// insert, so it becomes due once that lapses and the sweeper runs the
-		// event again — which is the whole difference between an outbox and a
-		// log of things that were attempted once.
 	})
+	if !ok {
+		release()
+	}
+	return ok
 }
 
 // HandleStateChange is wired to engine.Options.OnEvent. It is called
@@ -747,10 +912,10 @@ func (d *Dispatcher) completeOutbox(id int64) {
 // up exactly what the previous process was holding when it died — no separate
 // crash-recovery path, no bookkeeping to get out of step.
 //
-// Retries are at-least-once by construction: a lease that lapses while a
-// delivery is genuinely still running produces a duplicate alert. That is the
-// deliberate direction to fail in for a monitoring system, and the lease is
-// sized well above the dispatcher's own send budget so it is rare.
+// Retries are at-least-once by construction: a crash after a send and before
+// the row is cleared produces a duplicate alert. That is the deliberate
+// direction to fail in for a monitoring system. A lease that merely lapses
+// while this process still holds the row does not: see queueHeld.
 func (d *Dispatcher) RunOutbox(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		interval = DefaultOutboxInterval
@@ -814,21 +979,29 @@ func (d *Dispatcher) sweepOutbox(ctx context.Context) {
 			d.completeOutbox(item.ID)
 			continue
 		}
+		if d.isHeld(item.ID) {
+			// Still queued or running here; its lease merely lapsed while it
+			// waited. See queueHeld.
+			continue
+		}
 		d.log.Warn("notify: retrying an alert that did not complete",
 			"outbox_id", item.ID, "kind", item.Kind,
 			"monitor_id", item.MonitorID, "attempt", item.Attempts)
-		// Through the dispatch queue, not called here. The dispatch loop is
-		// single-threaded and everything it runs assumes that: the outage map,
-		// the digest buffer and the escalation timers are all reached without a
-		// lock in places. Running a retry on the sweeper's goroutine instead
-		// would race every one of them.
-		id := item.ID
-		d.enqueue(func(ctx context.Context) {
-			if run(ctx) == outcomeDone {
-				d.completeOutbox(id)
-			}
-		})
+		// Through the dispatch queue, not called here. A monitor's events run
+		// one after the other in its lane, and the processing relies on that: a
+		// retried DOWN running beside that monitor's live recovery could reopen
+		// the outage the recovery just closed. Running a retry on the sweeper's
+		// goroutine instead would step outside the lane.
+		d.queueHeld(item.ID, item.MonitorID, run)
 	}
+}
+
+// isHeld reports whether outbox row id is queued or running in this process.
+func (d *Dispatcher) isHeld(id int64) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, ok := d.held[id]
+	return ok
 }
 
 // replay turns a stored row back into the work it stands for.
@@ -1157,7 +1330,7 @@ func (d *Dispatcher) processDown(ctx context.Context, sc domain.StateChange) out
 		if !d.stopped {
 			if settings.ResendInterval > 0 {
 				st.resendTimer = d.clock.AfterFunc(settings.ResendInterval, func() {
-					d.enqueue(func(ctx context.Context) { d.processResend(ctx, sc.MonitorID) })
+					d.enqueueFor(sc.MonitorID, func(ctx context.Context) { d.processResend(ctx, sc.MonitorID) })
 				})
 			}
 			for _, delay := range escalationDelays(assignments) {
@@ -1339,7 +1512,7 @@ func (d *Dispatcher) processResend(ctx context.Context, monitorID int64) {
 	// Re-arm first so a delivery error can never break the reminder loop.
 	if !d.stopped && settings.ResendInterval > 0 {
 		st.resendTimer = d.clock.AfterFunc(settings.ResendInterval, func() {
-			d.enqueue(func(ctx context.Context) { d.processResend(ctx, monitorID) })
+			d.enqueueFor(monitorID, func(ctx context.Context) { d.processResend(ctx, monitorID) })
 		})
 	}
 	// Remind every level that has already been alerted.

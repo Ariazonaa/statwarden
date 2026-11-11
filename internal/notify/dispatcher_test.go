@@ -86,8 +86,7 @@ func (h *harness) expireOutboxLeases() {
 	h.store.SetOutboxClock(func() time.Time { return at })
 }
 
-// drain flushes the dispatch queue: a sentinel task runs only after every
-// task already queued has completed.
+// drain waits until every task accepted so far has completed.
 func (h *harness) drain(t *testing.T) {
 	t.Helper()
 	drainDispatcher(t, h.d)
@@ -101,12 +100,15 @@ func drainDispatcher(t *testing.T, d *Dispatcher) {
 	// marker enqueued directly could overtake an event that has been accepted
 	// but not yet recorded. Wait for the recorder to catch up first.
 	d.inflight.Wait()
-	done := make(chan struct{})
-	d.enqueue(func(context.Context) { close(done) })
-	select {
-	case <-done:
-	case <-time.After(testutil.Wait(2 * time.Second)):
-		t.Fatal("dispatcher did not drain in time")
+	// A sentinel task no longer proves anything: tasks run in per-monitor
+	// lanes, so one queued last can finish first. Wait for the count of
+	// accepted-but-unfinished tasks to reach zero instead.
+	deadline := time.Now().Add(testutil.Wait(2 * time.Second))
+	for d.queued.Load() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("dispatcher did not drain in time (%d tasks outstanding)", d.queued.Load())
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -1373,10 +1375,10 @@ func TestFreshRowIsNotSweptFromUnderItsOwner(t *testing.T) {
 	h.assign(13, assignSpec{id: 1, typ: "c"})
 	h.store.SetMonitorSettings(13, MonitorSettings{Name: "API"})
 
-	// Hold the dispatch loop so the event is recorded but not yet delivered —
+	// Hold the monitor's lane so the event is recorded but not yet delivered —
 	// exactly the window a sweep must not reach into.
 	blocked, release := make(chan struct{}), make(chan struct{})
-	h.d.enqueue(func(context.Context) { close(blocked); <-release })
+	h.d.enqueueFor(13, func(context.Context) { close(blocked); <-release })
 	<-blocked
 
 	h.d.HandleStateChange(downEvent(13, "API"))
@@ -1391,11 +1393,13 @@ func TestFreshRowIsNotSweptFromUnderItsOwner(t *testing.T) {
 	}
 }
 
-// A retry runs on the dispatch goroutine, not on the sweeper's.
+// A retry runs through the dispatch queue, in its monitor's lane, not on the
+// sweeper's goroutine.
 //
-// Everything the dispatch loop touches — the outage map, the digest buffer, the
-// escalation timers — is reached without a lock in places because that loop is
-// single-threaded. A sweeper that called into it directly would race all of it.
+// A monitor's events rely on running one after the other: a retried DOWN that
+// ran beside a live recovery for the same monitor could reopen the outage the
+// recovery just closed. A sweeper that called into it directly would skip the
+// lane and race it.
 func TestRetryRunsOnTheDispatchLoop(t *testing.T) {
 	h := newHarness(t, Options{QueueSize: 8})
 	ch := h.addChannel(t, "c")
@@ -1405,10 +1409,10 @@ func TestRetryRunsOnTheDispatchLoop(t *testing.T) {
 		t.Fatalf("EnqueueOutbox: %v", err)
 	}
 
-	// Occupy the dispatch loop. If the sweep delivers anyway, it ran the event
+	// Occupy the monitor's lane. If the sweep delivers anyway, it ran the event
 	// on its own goroutine.
 	blocked, release := make(chan struct{}), make(chan struct{})
-	h.d.enqueue(func(context.Context) { close(blocked); <-release })
+	h.d.enqueueFor(14, func(context.Context) { close(blocked); <-release })
 	<-blocked
 
 	h.d.sweepOutbox(context.Background())
