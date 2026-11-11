@@ -17,6 +17,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -36,6 +37,12 @@ const defaultTimeout = 15 * time.Second
 
 // wsGUID is the fixed RFC 6455 GUID used to compute Sec-WebSocket-Accept.
 const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+// maxHandshakeBytes caps how much of the handshake response is read. The status
+// line and headers of a real 101 are a few hundred bytes; http.ReadResponse has
+// no limit of its own, so without one a target that keeps sending header lines
+// grows this process's memory for as long as the check's timeout allows.
+const maxHandshakeBytes = 64 << 10
 
 // Config is the jsonb monitor configuration for the websocket type.
 type Config struct {
@@ -131,9 +138,13 @@ func (ch *Checker) Check(ctx context.Context, cfg json.RawMessage) (domain.Check
 	if err := req.Write(conn); err != nil {
 		return down(fmt.Sprintf("send handshake: %v", err))
 	}
-	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+	limited := &io.LimitedReader{R: conn, N: maxHandshakeBytes}
+	resp, err := http.ReadResponse(bufio.NewReader(limited), req)
 	latency := time.Since(start)
 	if err != nil {
+		if limited.N <= 0 {
+			return down(fmt.Sprintf("handshake response exceeds %d KiB", maxHandshakeBytes>>10))
+		}
 		return down(fmt.Sprintf("read handshake response: %v", err))
 	}
 	defer resp.Body.Close() //nolint:errcheck // handshake connection is torn down anyway
