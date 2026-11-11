@@ -97,6 +97,11 @@
 				notFound = true;
 			} else if (status === 401) {
 				passwordRequired = true;
+				// The unlock cookie is short-lived. When it lapses under an open
+				// page, the next live update or range switch answers 401 — and with
+				// the old data kept, the prompt (shown only without data) never
+				// appeared: the page froze on stale figures with no hint why.
+				data = null;
 				// A 401 in response to a submitted password means it was wrong.
 				if (password) passwordError = true;
 			} else {
