@@ -105,10 +105,16 @@ FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5
 # always taken its packages from anyway. What changes is that a rebuild now
 # picks up the branch's security fixes instead of freezing whatever the cached
 # base layer happened to carry.
+#
+# /data/backups is 0700: a dump holds every password hash, session and API-key
+# hash in the database, and nobody but this user has reason to list it. (A bind
+# mount replaces the directory with the host's, whose mode is the operator's to
+# set — docker-compose.yml says how.)
 RUN apk upgrade --no-cache \
     && apk add --no-cache ca-certificates tzdata postgresql17-client \
     && addgroup -S -g 10001 statwarden && adduser -S -u 10001 -G statwarden statwarden \
-    && mkdir -p /data/uploads /data/backups && chown -R statwarden:statwarden /data
+    && mkdir -p /data/uploads /data/backups && chown -R statwarden:statwarden /data \
+    && chmod 0700 /data/backups
 COPY --from=build /out/statwarden /usr/local/bin/statwarden
 
 USER statwarden

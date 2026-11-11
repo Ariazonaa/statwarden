@@ -24,13 +24,16 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/Ariazonaa/statwarden/internal/db"
 	"github.com/Ariazonaa/statwarden/internal/metrics"
 	"github.com/Ariazonaa/statwarden/internal/safego"
 )
@@ -130,7 +133,7 @@ func (r *Runner) Preflight() error {
 	if _, err := exec.LookPath(r.dumpCmd); err != nil {
 		return fmt.Errorf("%w (looked for %q)", ErrDumpToolMissing, r.dumpCmd)
 	}
-	if err := os.MkdirAll(r.dir, 0o750); err != nil {
+	if err := os.MkdirAll(r.dir, 0o700); err != nil {
 		return fmt.Errorf("backup: create %s: %w", r.dir, err)
 	}
 	probe := filepath.Join(r.dir, ".writable")
@@ -215,28 +218,56 @@ func (r *Runner) runOnce(ctx context.Context) {
 // pg_restore can restore selectively and in parallel — which matters precisely
 // when someone is restoring under pressure.
 func (r *Runner) Dump(ctx context.Context) (string, error) {
-	if err := os.MkdirAll(r.dir, 0o750); err != nil {
+	if err := os.MkdirAll(r.dir, 0o700); err != nil {
 		return "", fmt.Errorf("backup: create %s: %w", r.dir, err)
 	}
 	name := FilePrefix + r.now().UTC().Format(timeLayout) + fileExt
 	final := filepath.Join(r.dir, name)
 	tmp := final + partialExt
 
+	// The file is created HERE, 0600, and pg_dump writes to it through stdout.
+	// Given --file, pg_dump creates the file itself under the process umask —
+	// 0644 almost everywhere — and a dump holds every password hash, session
+	// and API-key hash in the database. O_EXCL because a leftover .partial is
+	// never something to append to.
+	out, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // G304: generated name inside the configured backup dir
+	if err != nil {
+		return "", fmt.Errorf("backup: create %s: %w", tmp, err)
+	}
+
+	// The password travels in PGPASSWORD, not on the command line: argv is
+	// readable by every local user in /proc/<pid>/cmdline for as long as the
+	// dump runs. The pgxpool-only settings are dropped as well, because libpq
+	// refuses URI parameters it does not know.
+	conn, password := splitPassword(db.PortableConnString(r.databaseURL))
+
 	// --no-owner/--no-acl so the dump restores into a database owned by whoever
 	// is restoring it, rather than demanding the original role exist. That is
 	// the difference between a restore working on a fresh machine and failing on
 	// a missing user at the worst possible moment.
 	// argv form, never a shell: no argument is word-split or glob-expanded, so
-	// neither the generated tmp path nor DATABASE_URL can introduce a second
-	// command. dumpCmd itself is "pg_dump" unless a test overrides it.
-	cmd := exec.CommandContext(ctx, r.dumpCmd, //nolint:gosec // G204: argv form, arguments come from config and a generated path
-		"--format=custom", "--no-owner", "--no-acl", "--file="+tmp, r.databaseURL)
-	// The URL carries the password, so it must not reach a log. Only stderr is
-	// captured, and it is truncated: pg_dump can be verbose, and an error string
-	// is a log line, not a file.
+	// DATABASE_URL cannot introduce a second command. dumpCmd itself is
+	// "pg_dump" unless a test overrides it.
+	cmd := exec.CommandContext(ctx, r.dumpCmd, //nolint:gosec // G204: argv form, arguments come from config
+		"--format=custom", "--no-owner", "--no-acl", "--dbname="+conn)
+	cmd.Stdout = out
+	if password != "" {
+		cmd.Env = append(os.Environ(), "PGPASSWORD="+password)
+	}
+	// Only stderr is captured, and it is truncated: pg_dump can be verbose, and
+	// an error string is a log line, not a file.
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	runErr := cmd.Run()
+	// Sync before the rename: a dump that is renamed into place but still in the
+	// page cache is not a backup if the host loses power a second later.
+	if runErr == nil {
+		runErr = out.Sync()
+	}
+	if cerr := out.Close(); runErr == nil {
+		runErr = cerr
+	}
+	if err := runErr; err != nil {
 		_ = os.Remove(tmp)
 		msg := strings.TrimSpace(stderr.String())
 		if len(msg) > 500 {
@@ -318,6 +349,43 @@ func (r *Runner) list() ([]dumpFile, error) {
 	}
 	return out, nil
 }
+
+// keywordPassword matches the password=… pair of a keyword/value connection
+// string, quoted (with libpq's backslash escapes) or bare.
+var keywordPassword = regexp.MustCompile(`(^|\s+)password=('((?:[^'\\]|\\.)*)'|(\S*))`)
+
+// splitPassword removes the password from a connection string and returns it
+// separately, decoded, for PGPASSWORD. A string with no password comes back
+// unchanged with "", leaving whatever PGPASSWORD or .pgpass the environment
+// already provides in charge. Both libpq forms are handled: postgres:// URLs
+// and keyword/value strings.
+func splitPassword(conn string) (string, string) {
+	if strings.HasPrefix(conn, "postgres://") || strings.HasPrefix(conn, "postgresql://") {
+		u, err := url.Parse(conn)
+		if err != nil || u.User == nil {
+			return conn, ""
+		}
+		pw, ok := u.User.Password()
+		if !ok {
+			return conn, ""
+		}
+		u.User = url.User(u.User.Username())
+		return u.String(), pw
+	}
+	m := keywordPassword.FindStringSubmatch(conn)
+	if m == nil {
+		return conn, ""
+	}
+	pw := m[4]
+	if strings.HasPrefix(m[2], "'") {
+		pw = keywordUnescape.ReplaceAllString(m[3], "$1")
+	}
+	// m[0] carries the whitespace in front of the pair, so cutting it leaves
+	// the remaining pairs — quoted values with spaces included — intact.
+	return strings.TrimSpace(strings.Replace(conn, m[0], "", 1)), pw
+}
+
+var keywordUnescape = regexp.MustCompile(`\\(.)`)
 
 // legacyFilePrefix is the dump prefix from before the project was renamed from
 // Uptura. Dumps written under it are still recognised, so retention keeps

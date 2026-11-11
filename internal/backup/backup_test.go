@@ -2,12 +2,137 @@ package backup
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
+
+// fakeDumpEnv turns this test binary into a stand-in for pg_dump: re-executed
+// with it set, the process prints what it was given — argv and the password
+// environment — to stdout and exits, so a test can see exactly what Dump hands
+// the real tool without needing one installed.
+const fakeDumpEnv = "STATWARDEN_BACKUP_FAKE_PG_DUMP"
+
+type fakeDumpRecord struct {
+	Args       []string `json:"args"`
+	PGPassword string   `json:"pgpassword"`
+}
+
+func TestMain(m *testing.M) {
+	if os.Getenv(fakeDumpEnv) == "1" {
+		_ = json.NewEncoder(os.Stdout).Encode(fakeDumpRecord{
+			Args:       os.Args[1:],
+			PGPassword: os.Getenv("PGPASSWORD"),
+		})
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+// fakeDumpRunner returns a Runner whose pg_dump is this test binary.
+func fakeDumpRunner(t *testing.T, dsn string) (*Runner, string) {
+	t.Helper()
+	t.Setenv(fakeDumpEnv, "1")
+	t.Setenv("PGPASSWORD", "")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	return New(Options{Dir: dir, DatabaseURL: dsn, dumpCmd: exe,
+		Now: func() time.Time { return at(2026, 8, 13, 12) }}), dir
+}
+
+func readFakeDump(t *testing.T, path string) fakeDumpRecord {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read dump: %v", err)
+	}
+	var rec fakeDumpRecord
+	if err := json.Unmarshal(b, &rec); err != nil {
+		t.Fatalf("the dump file does not hold what pg_dump wrote to stdout: %v (%q)", err, b)
+	}
+	return rec
+}
+
+// TestDumpKeepsThePasswordOutOfArgv pins that the database password reaches
+// pg_dump through PGPASSWORD, never the command line. argv is world-readable
+// in /proc/<pid>/cmdline for as long as the dump runs, so the URL that used to
+// be passed verbatim handed the database password to every local user and to
+// any process-listing in a support bundle.
+func TestDumpKeepsThePasswordOutOfArgv(t *testing.T) {
+	r, _ := fakeDumpRunner(t,
+		"postgres://statwarden:s3cr%40t-pw@db.example.test:5432/statwarden?sslmode=disable&pool_max_conns=8")
+	path, err := r.Dump(context.Background())
+	if err != nil {
+		t.Fatalf("Dump: %v", err)
+	}
+	rec := readFakeDump(t, path)
+	for _, a := range rec.Args {
+		if strings.Contains(a, "s3cr") {
+			t.Fatalf("the password is on pg_dump's command line: %q", rec.Args)
+		}
+		// libpq rejects URI parameters it does not know, so a pgxpool knob in
+		// DATABASE_URL used to fail every dump.
+		if strings.Contains(a, "pool_max_conns") {
+			t.Fatalf("a pgxpool-only parameter reached pg_dump: %q", rec.Args)
+		}
+	}
+	if rec.PGPassword != "s3cr@t-pw" {
+		t.Fatalf("PGPASSWORD = %q, want the decoded password from DATABASE_URL", rec.PGPassword)
+	}
+	joined := strings.Join(rec.Args, " ")
+	if !strings.Contains(joined, "statwarden@db.example.test:5432/statwarden") {
+		t.Fatalf("the connection target is missing from argv: %q", rec.Args)
+	}
+}
+
+// A keyword/value DSN carries its password as password=…; it must be lifted
+// out the same way.
+func TestSplitPasswordKeywordForm(t *testing.T) {
+	conn, pw := splitPassword("host=db.example.test user=sw password='a b\\'c' dbname=app")
+	if pw != "a b'c" {
+		t.Errorf("password = %q, want %q", pw, "a b'c")
+	}
+	if strings.Contains(conn, "password") || !strings.Contains(conn, "dbname=app") {
+		t.Errorf("connection string = %q, want it without the password and with the rest", conn)
+	}
+	conn, pw = splitPassword("host=db.example.test password=plain user=sw")
+	if pw != "plain" || strings.Contains(conn, "plain") {
+		t.Errorf("unquoted password: conn=%q pw=%q", conn, pw)
+	}
+}
+
+// TestDumpFileIsPrivate pins the dump's mode. pg_dump creates its --file with
+// the process umask, which is 0644 almost everywhere, and a dump holds every
+// password hash, session and API-key hash in the database. The file is now
+// created by this package, 0600, and pg_dump only writes into it.
+func TestDumpFileIsPrivate(t *testing.T) {
+	r, _ := fakeDumpRunner(t, "postgres://sw@db.example.test/app")
+	path, err := r.Dump(context.Background())
+	if err != nil {
+		t.Fatalf("Dump: %v", err)
+	}
+	readFakeDump(t, path) // the content went through the file this package opened
+	if runtime.GOOS == "windows" {
+		// Windows has no group/other permission bits to assert on; the content
+		// check above is what this platform can verify.
+		return
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := fi.Mode().Perm(); perm&0o077 != 0 {
+		t.Fatalf("dump mode = %04o, want no group or other access", perm)
+	}
+}
 
 func at(y int, m time.Month, d, h int) time.Time {
 	return time.Date(y, m, d, h, 0, 0, 0, time.UTC)

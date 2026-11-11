@@ -360,6 +360,17 @@ the `backup` job in `/metrics`, which is the condition to alert on.
 Dumps are written to a `.partial` file and renamed only on success, so a crashed
 or killed dump can never be mistaken for a restorable one.
 
+### What a dump contains
+
+A dump is **not encrypted**. Monitor and notification credentials inside it are
+still sealed with `ENCRYPTION_KEY`, but password hashes, session and API-key
+hashes, the audit log and every e-mail address are in it as stored. The job
+creates each dump `0600` and its directory `0700`, and the database password is
+handed to `pg_dump` through `PGPASSWORD` rather than its command line. Keep it
+that way when you copy dumps elsewhere: encrypt them before they leave the host
+(for example with `age` or `gpg`), and never store the `ENCRYPTION_KEY` next to
+them.
+
 ### Restoring
 
 A backup nobody has restored is a guess. The integration suite performs a real
