@@ -16,9 +16,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Ariazonaa/statwarden/internal/domain"
 	"github.com/Ariazonaa/statwarden/internal/httpx"
+	"github.com/Ariazonaa/statwarden/internal/notify/redact"
 	"github.com/Ariazonaa/statwarden/internal/notify/registry"
 )
 
@@ -104,16 +106,16 @@ func (n *Notifier) Send(ctx context.Context, cfg json.RawMessage, event domain.N
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(body(event)))
 	if err != nil {
-		return fmt.Errorf("ntfy: build request: %w", err)
+		return fmt.Errorf("ntfy: build request: %w", redact.Error(err, endpoint))
 	}
 	req.Header.Set("Content-Type", "text/plain; charset=utf-8")
 	req.Header.Set("User-Agent", "Statwarden")
 	if event.Title != "" {
-		req.Header.Set("X-Title", event.Title)
+		req.Header.Set("X-Title", headerValue(event.Title))
 	}
 	req.Header.Set("X-Priority", strconv.Itoa(priority(c, event)))
 	if tags := tags(c, event); tags != "" {
-		req.Header.Set("X-Tags", tags)
+		req.Header.Set("X-Tags", headerValue(tags))
 	}
 	switch {
 	case c.Token != "":
@@ -122,16 +124,32 @@ func (n *Notifier) Send(ctx context.Context, cfg json.RawMessage, event domain.N
 		req.SetBasicAuth(c.Username, c.Password)
 	}
 
+	// Errors name the server, not the topic: the topic is the path, and on a
+	// public server knowing it is all it takes to read and publish.
+	target := redact.URL(endpoint)
 	resp, err := n.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("ntfy: POST %s: %w", endpoint, err)
+		return fmt.Errorf("ntfy: POST %s: %w", target, redact.Error(err, endpoint))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("ntfy: POST %s: unexpected status %s", endpoint, resp.Status)
+		return fmt.Errorf("ntfy: POST %s: unexpected status %s", target, resp.Status)
 	}
 	return nil
+}
+
+// headerValue makes free text safe to send as an HTTP header value.
+//
+// The title is the rendered monitor name, which is free text, and net/http
+// refuses to build a request whose header holds a control character. A monitor
+// whose name carried a stray newline therefore failed every delivery, and each
+// retry failed the same way. Control characters count as spaces, and runs of
+// them collapse to one, so a CRLF reads as a word break rather than a gap.
+func headerValue(s string) string {
+	return strings.Join(strings.FieldsFunc(s, func(r rune) bool {
+		return r == ' ' || unicode.IsControl(r)
+	}), " ")
 }
 
 // body is the plain-text message; ntfy renders the title from the X-Title
