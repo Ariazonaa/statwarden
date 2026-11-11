@@ -188,6 +188,41 @@ func TestDeliverReportsANonSuccessStatus(t *testing.T) {
 	}
 }
 
+// A collector URL can carry its credential — a token in the path, an API key as
+// a query parameter — and net/http quotes the whole URL in a transport error.
+// Neither the error Deliver returns (which a "test this URL" button shows) nor
+// the queue's own log line may repeat it.
+func TestDeliveryErrorsDoNotCarryTheTargetURL(t *testing.T) {
+	const secret = "s3cr3t-collector-token"
+	target := "http://127.0.0.1:1/ingest/" + secret + "?api_key=" + secret
+
+	q := New[payload](Options{Name: "test", Logger: discard()})
+	err := q.Deliver(context.Background(), target, "", payload{N: 1})
+	if err == nil {
+		t.Fatal("a delivery to a closed port succeeded")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("Deliver's error carries the URL's secret: %v", err)
+	}
+
+	var buf bytes.Buffer
+	var mu sync.Mutex
+	log := slog.New(slog.NewTextHandler(&writerFunc{&buf, &mu}, nil))
+	q = New[payload](Options{Name: "test", Logger: log,
+		URL: func(context.Context) (string, error) { return target, nil }})
+	q.Enqueue(payload{N: 2})
+	waitFor(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return strings.Contains(buf.String(), "delivery failed")
+	})
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Contains(buf.String(), secret) {
+		t.Errorf("the log carries the URL's secret:\n%s", buf.String())
+	}
+}
+
 // writerFunc is a mutex-guarded io.Writer, so the test goroutine can read the
 // buffer while a delivery goroutine may still be writing to it.
 type writerFunc struct {
