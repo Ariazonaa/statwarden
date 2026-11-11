@@ -230,6 +230,26 @@ build command, pass one of them or `/api/v1/version` will report
 
 ---
 
+## First-run setup
+
+Until the first account exists, the setup page creates an admin, and the instance is reachable
+from the moment it starts. So setup requires a one-time **setup token**: at every start while no
+account exists, the server generates one and logs it at `WARN` level as `setup_token`.
+
+```sh
+docker compose logs statwarden | grep "setup token"   # Docker
+journalctl -u statwarden | grep "setup token"         # systemd
+```
+
+For headless provisioning set `SETUP_TOKEN` (16 characters or more) instead; it is used as given
+and not printed. Once an account exists the token has no effect and is no longer logged.
+
+## Sign-in with an identity provider
+
+An account signed in through OIDC is as strong as the identity provider's own authentication: the
+local TOTP second factor applies to password sign-ins only. Require a second factor at the
+provider for accounts that use single sign-on.
+
 ## Health & readiness
 
 | Endpoint   | Meaning                                        | Use for            |
