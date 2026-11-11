@@ -85,10 +85,17 @@ func (s *server) handleTOTPVerify(w http.ResponseWriter, r *http.Request) {
 		writeProblemDetail(w, http.StatusBadRequest, "start enrolment first")
 		return
 	}
+	// A six-digit code is a million guesses, which is nothing at request speed;
+	// it shares the re-authentication budget with the password checks.
+	if s.reauthLocked(w, p.userID) {
+		return
+	}
 	if !auth.VerifyTOTP(creds.TOTPSecret, req.Code, s.now()) {
+		s.reauthFailed(r, p.userID)
 		writeProblemDetail(w, http.StatusBadRequest, "code did not verify")
 		return
 	}
+	s.reauthSucceeded(p.userID)
 	plain, hashed, err := auth.GenerateBackupCodes()
 	if err != nil {
 		writeProblemDetail(w, http.StatusInternalServerError, "generate backup codes")

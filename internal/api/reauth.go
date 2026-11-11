@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/Ariazonaa/statwarden/internal/auth"
 )
@@ -53,8 +54,13 @@ func (s *server) reauthenticate(w http.ResponseWriter, r *http.Request, su stepU
 		return true
 	}
 
+	if s.reauthLocked(w, p.userID) {
+		return false
+	}
+
 	if creds.PasswordHash != "" {
 		if ok, _ := auth.VerifyPassword(su.Password, creds.PasswordHash); !ok {
+			s.reauthFailed(r, p.userID)
 			s.audit(r.Context(), &p.userID, "user.reauth_failed", "user", &p.userID, clientIP(r),
 				map[string]any{"factor": "password"})
 			writeProblemDetail(w, http.StatusForbidden, "password is incorrect")
@@ -64,13 +70,55 @@ func (s *server) reauthenticate(w http.ResponseWriter, r *http.Request, su stepU
 
 	if creds.TOTPEnabled {
 		if !s.consumeSecondFactor(r, creds, su.TOTPCode) {
+			s.reauthFailed(r, p.userID)
 			s.audit(r.Context(), &p.userID, "user.reauth_failed", "user", &p.userID, clientIP(r),
 				map[string]any{"factor": "totp"})
 			writeProblemDetail(w, http.StatusForbidden, "two-factor code did not verify")
 			return false
 		}
 	}
+	s.reauthSucceeded(p.userID)
 	return true
+}
+
+// Every check that makes a signed-in caller re-prove a factor — the step-up
+// above, the password and address changes, TOTP enrolment — draws on one
+// failure budget per account, through the same lockout the login form uses.
+//
+// They had none. A borrowed session could guess the password, or a six-digit
+// code, at request speed: exactly the online guessing the login lockout exists
+// to stop, reached from the other side of the front door. Keyed on the account
+// alone, with no IP, because the caller is already authenticated as it — the
+// only person a stranger could lock out of these checks is someone whose
+// session they already hold, and then this is the point.
+
+// reauthKey is the lockout bucket for one account's re-authentication checks.
+// The prefix keeps it apart from loginKey's (digest|address) buckets.
+func reauthKey(userID int64) string {
+	return "reauth:" + strconv.FormatInt(userID, 10)
+}
+
+// reauthLocked answers 429 and returns true while the account's budget is spent.
+// It runs before any factor is checked, so a locked bucket cannot be probed
+// with the right answer either.
+func (s *server) reauthLocked(w http.ResponseWriter, userID int64) bool {
+	if !s.lockout.locked(reauthKey(userID)) {
+		return false
+	}
+	writeProblemDetail(w, http.StatusTooManyRequests, "too many failed attempts, try again later")
+	return true
+}
+
+// reauthFailed counts one wrong factor and audits the moment the bucket locks.
+func (s *server) reauthFailed(r *http.Request, userID int64) {
+	if s.lockout.fail(reauthKey(userID)) {
+		s.audit(r.Context(), &userID, "user.reauth_lockout", "user", &userID, clientIP(r), nil)
+	}
+}
+
+// reauthSucceeded clears the budget once the owner has proven the factor.
+func (s *server) reauthSucceeded(userID int64) {
+	s.lockout.reset(reauthKey(userID))
 }
 
 // consumeSecondFactor accepts a current authenticator code or an unused backup

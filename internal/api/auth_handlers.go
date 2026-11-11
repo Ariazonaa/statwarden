@@ -301,10 +301,15 @@ func (s *server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	if storeError(w, err) {
 		return
 	}
+	if s.reauthLocked(w, p.userID) {
+		return
+	}
 	if ok, _ := auth.VerifyPassword(req.CurrentPassword, creds.PasswordHash); !ok {
+		s.reauthFailed(r, p.userID)
 		writeProblemDetail(w, http.StatusForbidden, "current password is incorrect")
 		return
 	}
+	s.reauthSucceeded(p.userID)
 	if err := validatePassword(req.NewPassword); err != nil {
 		writeProblemDetail(w, http.StatusBadRequest, err.Error())
 		return
@@ -379,10 +384,15 @@ func (s *server) handleChangeEmail(w http.ResponseWriter, r *http.Request) {
 	}
 	// Verified BEFORE the address is even looked at, so a caller who cannot
 	// prove the password learns nothing about the address rules either.
+	if s.reauthLocked(w, p.userID) {
+		return
+	}
 	if ok, _ := auth.VerifyPassword(req.CurrentPassword, creds.PasswordHash); !ok {
+		s.reauthFailed(r, p.userID)
 		writeProblemDetail(w, http.StatusForbidden, "current password is incorrect")
 		return
 	}
+	s.reauthSucceeded(p.userID)
 	if err := validateEmail(req.Email); err != nil {
 		writeProblemDetail(w, http.StatusBadRequest, err.Error())
 		return

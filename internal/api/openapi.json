@@ -890,6 +890,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/ReauthLocked"
           }
         }
       }
@@ -1061,6 +1064,9 @@
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/ReauthLocked"
           }
         }
       }
@@ -1183,6 +1189,9 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/ReauthLocked"
           }
         },
         "requestBody": {
@@ -1234,6 +1243,9 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/ReauthLocked"
           }
         }
       }
@@ -1329,6 +1341,9 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/ReauthLocked"
           }
         },
         "requestBody": {
@@ -1380,6 +1395,9 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/ReauthLocked"
           }
         }
       }
@@ -1433,6 +1451,9 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/ReauthLocked"
           }
         },
         "requestBody": {
@@ -1495,6 +1516,9 @@
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/ReauthLocked"
           }
         }
       }
@@ -4551,6 +4575,16 @@
       },
       "Conflict": {
         "description": "The resource already exists, or the state transition is not allowed.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "ReauthLocked": {
+        "description": "Too many wrong passwords or codes in this account's re-authentication checks; wait out the cool-off. Even the correct answer is refused until then.",
         "content": {
           "application/problem+json": {
             "schema": {
