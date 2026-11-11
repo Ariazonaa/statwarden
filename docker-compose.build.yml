@@ -1,26 +1,25 @@
-# Overlay: das Image lokal bauen statt es aus der Registry zu ziehen.
+# Overlay: build the image locally instead of pulling it from the registry.
 #
 #   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 #
-# Wofuer: eine Aenderung ausprobieren, die noch nicht auf main ist; eine
-# Instanz ohne Zugang zur privaten Registry; oder nachvollziehen, ob ein
-# selbst gebautes Image dasselbe tut wie das veroeffentlichte. Fuer den
-# Normalbetrieb ist das nicht noetig — docker-compose.yml zieht das Image,
-# das die Pipeline gebaut und gescannt hat.
+# What for: trying a change that is not on main yet; running an instance that
+# cannot reach the registry; or checking that a self-built image behaves like
+# the published one. Normal operation does not need it — docker-compose.yml
+# pulls the image the pipeline built and scanned.
 #
-# `image:` wird hier bewusst UEBERSCHRIEBEN. Ohne das baut Compose zwar
-# lokal, taggt das Ergebnis aber unter dem Registry-Namen — und der naechste
-# `docker compose pull` ueberschriebe es kommentarlos mit dem Stand aus der
-# Registry, ohne dass jemand merkt, dass der lokale Build weg ist.
+# `image:` is deliberately OVERRIDDEN here. Without it Compose would build
+# locally but tag the result with the registry name, and the next
+# `docker compose pull` would silently replace it with the registry's image,
+# without anyone noticing the local build was gone.
 services:
   app:
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        # Fuellt /api/v1/version. Ohne diese Werte meldet ein selbst gebautes
-        # Image "dev"/"none"/"unknown", was nach einem Rollback die eine Frage
-        # unbeantwortet laesst, die dann zaehlt: was laeuft hier gerade.
+        # Fills /api/v1/version. Without these a self-built image reports
+        # "dev"/"none"/"unknown", which after a rollback leaves the one question
+        # that matters unanswered: what is running here right now.
         VERSION: ${VERSION:-compose}
         COMMIT: ${COMMIT:-none}
         DATE: ${BUILD_DATE:-unknown}
