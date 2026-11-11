@@ -374,7 +374,9 @@ func newWithServer(o Options) (http.Handler, *server) {
 	// otherwise swallow it, serving the status page with frame-ancestors 'none'.
 	r.With(framableStatusPage).Handle("/status/*", o.Static)
 
-	r.Handle("/*", o.Static)
+	// customDomainRoot sends "/" on a page's custom domain to that page; every
+	// other request falls through to the SPA unchanged.
+	r.Handle("/*", s.customDomainRoot(o.Static))
 	return r, s
 }
 
