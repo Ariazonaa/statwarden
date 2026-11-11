@@ -2,10 +2,12 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Ariazonaa/statwarden/internal/domain"
@@ -284,7 +286,19 @@ func (s *server) applyBundle(r *http.Request, monitors []importexport.MonitorSpe
 		if _, ok := tagIDByName[t.Name]; ok {
 			continue
 		}
-		created, err := s.store.CreateTag(ctx, t.Name, t.Color)
+		// The same rules handleCreateTag applies. The colour is interpolated into
+		// an inline style, so an unchecked one is a stored CSS injection; it is
+		// replaced rather than the tag dropped, so its monitors keep the tag.
+		if err := checkLength("name", t.Name, maxTagNameRunes); t.Name == "" || err != nil {
+			res.Warnings = append(res.Warnings, "tag "+t.Name+": invalid name, skipped")
+			continue
+		}
+		color, ok := resolveTagColor(t.Color)
+		if !ok {
+			res.Warnings = append(res.Warnings, "tag "+t.Name+": invalid colour, default used")
+			color = defaultTagColor
+		}
+		created, err := s.store.CreateTag(ctx, t.Name, color)
 		if err != nil {
 			res.Warnings = append(res.Warnings, "tag "+t.Name+": "+err.Error())
 			continue
@@ -367,9 +381,23 @@ func (s *server) applyBundle(r *http.Request, monitors []importexport.MonitorSpe
 		groupIDByName[created.Name] = created.ID
 	}
 
+	// Monitors are matched by name too, as this function's caller promises for
+	// every entity: re-importing a bundle used to create every monitor again.
+	existingMonitors, err := s.monitorIDsByName(ctx)
+	if err != nil {
+		res.Warnings = append(res.Warnings, "could not list existing monitors; duplicates were not checked")
+	}
+
 	principal := principalFrom(r)
 	idByName := map[string]int64{}
 	for _, m := range parentsFirst(monitors) {
+		// The existing monitor stands in for the skipped one, so children and
+		// status pages in the bundle still find it.
+		if id, ok := existingMonitors[m.Name]; ok {
+			idByName[m.Name] = id
+			res.Warnings = append(res.Warnings, "monitor "+m.Name+": a monitor with this name already exists, skipped")
+			continue
+		}
 		cfg := m.Config
 		if len(cfg) == 0 {
 			cfg = json.RawMessage(`{}`)
@@ -517,6 +545,10 @@ func (s *server) applyBundle(r *http.Request, monitors []importexport.MonitorSpe
 	}
 
 	for _, p := range pages {
+		if err := validateImportedPage(p); err != nil {
+			res.Warnings = append(res.Warnings, "status page "+p.Slug+": "+err.Error()+", skipped")
+			continue
+		}
 		page, warnings := pageFromSpec(p, idByName)
 		res.Warnings = append(res.Warnings, warnings...)
 		if _, err := s.store.CreateStatusPage(ctx, page); err != nil {
@@ -528,12 +560,30 @@ func (s *server) applyBundle(r *http.Request, monitors []importexport.MonitorSpe
 	return res
 }
 
+// validateImportedPage applies the checks handleCreateStatusPage makes. The slug
+// becomes a public URL path and the group names are the layout's join key, so
+// an import must not be the one way around them.
+func validateImportedPage(p importexport.StatusPageSpec) error {
+	if p.Title == "" {
+		return validationError("title is required")
+	}
+	if err := validateStatusPageSlug(p.Slug); err != nil {
+		return err
+	}
+	groups := make([]statusPageGroupInput, 0, len(p.Groups))
+	for _, g := range p.Groups {
+		groups = append(groups, statusPageGroupInput{Name: g.Name, SortOrder: g.SortOrder})
+	}
+	return validateStatusPageGroups(groups)
+}
+
 // pageFromSpec builds the status page an imported spec describes, resolving
 // monitor names through idByName, and returns the warnings the operator needs.
 func pageFromSpec(p importexport.StatusPageSpec, idByName map[string]int64) (StatusPage, []string) {
 	var warnings []string
-	// Resolved against the monitors created in THIS call, so a monitor the
-	// monitor loop skipped takes its status-page slot with it. Reported, or the
+	// Resolved against the bundle's monitors as this call created or matched
+	// them, so a monitor the monitor loop skipped takes its status-page slot
+	// with it. Reported, or the
 	// page comes up listing fewer services than the bundle described and the
 	// result still reads as a clean import.
 	resolve := func(name string) (int64, bool) {
@@ -545,7 +595,7 @@ func pageFromSpec(p importexport.StatusPageSpec, idByName map[string]int64) (Sta
 		return id, ok
 	}
 	page := StatusPage{
-		Slug:          p.Slug,
+		Slug:          strings.TrimSpace(p.Slug),
 		Title:         p.Title,
 		Description:   p.Description,
 		FooterText:    p.FooterText,
@@ -584,6 +634,26 @@ func pageFromSpec(p importexport.StatusPageSpec, idByName map[string]int64) (Sta
 		}
 	}
 	return page, warnings
+}
+
+// monitorIDsByName maps the name of every live monitor to its id. With
+// duplicate names the first one listed wins, which is all de-duplication needs.
+func (s *server) monitorIDsByName(ctx context.Context) (map[string]int64, error) {
+	out := map[string]int64{}
+	for offset := 0; ; offset += exportPageSize {
+		page, total, err := s.store.ListMonitors(ctx, MonitorFilter{}, Page{Limit: exportPageSize, Offset: offset})
+		if err != nil {
+			return out, err
+		}
+		for _, m := range page {
+			if _, seen := out[m.Name]; !seen {
+				out[m.Name] = m.ID
+			}
+		}
+		if len(page) == 0 || offset+len(page) >= total {
+			return out, nil
+		}
+	}
 }
 
 // parentsFirst orders monitor specs so that every monitor whose parent is in the
