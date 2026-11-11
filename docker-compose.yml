@@ -28,6 +28,16 @@ services:
     # graceful-shutdown budget, so in-flight checks and alerts were cut off on
     # every `docker compose down` or image update. 30s matches the systemd unit.
     stop_grace_period: 30s
+    # Hardening. The app needs no Linux capability: ping monitors use
+    # unprivileged ICMP sockets, which Docker allows by default through the
+    # container's net.ipv4.ping_group_range. It writes only to the two volumes
+    # below and to /tmp (the Uptime Kuma importer stages its upload there), so
+    # the rest of the filesystem is read-only.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp
     depends_on:
       db:
         condition: service_healthy

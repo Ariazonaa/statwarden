@@ -32,8 +32,11 @@
 # Logs: journalctl -u statwarden -f   (the app emits structured JSON on stdout).
 # Startup refusals and "configuration warning" lines both land there.
 #
-# ICMP ping monitors need raw sockets. Either keep AmbientCapabilities below
-# (grants only CAP_NET_RAW) or run the pinger in unprivileged UDP mode.
+# ICMP ping monitors use unprivileged ICMP ("ping") sockets, not raw ones, so
+# the service holds no capabilities at all. The kernel allows those sockets to
+# the groups in net.ipv4.ping_group_range, which systemd's default sysctl sets
+# to every group. If ping monitors fail with "permission denied", check:
+#   sysctl net.ipv4.ping_group_range   # must include the statwarden gid
 
 [Unit]
 Description=Statwarden uptime monitoring
@@ -80,17 +83,35 @@ PrivateTmp=true
 PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
+ProtectKernelLogs=true
 ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
 RestrictNamespaces=true
 RestrictSUIDSGID=true
+RestrictRealtime=true
 LockPersonality=true
+MemoryDenyWriteExecute=true
+RemoveIPC=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# A denied call fails with EPERM instead of killing the process: a monitoring
+# service that dies on an unexpected syscall is worse than one that logs it.
+SystemCallErrorNumber=EPERM
+# IPv4/IPv6 for every check, UNIX for the Docker monitor's socket, NETLINK for
+# Go's interface enumeration.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 ReadWritePaths=/var/lib/statwarden
 # Nothing this service writes — uploads, and database dumps that hold every
 # password and session hash — is meant for other local users.
 UMask=0027
-# ICMP raw sockets for ping monitors. Remove both lines if you don't use them.
-AmbientCapabilities=CAP_NET_RAW
-CapabilityBoundingSet=CAP_NET_RAW
+# No capabilities: ping monitors use unprivileged ICMP sockets (see the top of
+# this file), and nothing else needs one. The previous CAP_NET_RAW grant was
+# never used by the code.
+CapabilityBoundingSet=
+AmbientCapabilities=
 
 [Install]
 WantedBy=multi-user.target
