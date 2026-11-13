@@ -32,10 +32,10 @@ require (
 	github.com/prometheus-community/pro-bing v0.9.1
 	github.com/prometheus/client_golang v1.25.0
 	github.com/redis/go-redis/v9 v9.23.0
-	github.com/tidwall/gjson v1.20.1
+	github.com/tidwall/gjson v1.20.2
 	go.mongodb.org/mongo-driver v1.17.10
 	golang.org/x/crypto v0.58.0
-	golang.org/x/image v0.47.0
+	golang.org/x/image v0.48.0
 	golang.org/x/sync v0.25.0
 	google.golang.org/grpc v1.85.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -67,15 +67,15 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
-	github.com/tidwall/pretty v1.2.0 // indirect
+	github.com/tidwall/pretty v1.3.0 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.1.2 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	go.uber.org/atomic v1.12.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260817212433-ac3dfec99bb1 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	modernc.org/libc v1.80.1 // indirect
